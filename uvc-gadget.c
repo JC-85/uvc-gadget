@@ -419,8 +419,9 @@ static int tee_open_if_needed(struct v4l2_device *dev)
 
     if (dev->tee_fd >= 0)
         return 0;
-
+#ifdef DEBUG
     printf("TEE: opening FIFO %s\n", dev->tee_path);
+#endif
     // Open FIFO non-blocking for writing.
     // If there is no reader yet, open() will fail with ENXIO -> that's OK.
     int fd = open(dev->tee_path, O_RDWR | O_NONBLOCK);
@@ -432,7 +433,9 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     }
 
     dev->tee_fd = fd;
+    #ifdef DEBUG
     printf("TEE: opened FIFO %s, fd=%d\n", dev->tee_path, dev->tee_fd);
+    #endif
     return 0;
 }
 
