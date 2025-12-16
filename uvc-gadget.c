@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/video.h>
@@ -142,6 +143,63 @@ static const struct uvc_frame_info uvc_frames_yuyv[] = {
         },
     },
 };
+
+#include <signal.h>
+
+// ...
+
+static int tee_open_if_needed(struct v4l2_device *dev)
+{
+    if (!dev->tee_path)
+        return 0;
+
+    if (dev->tee_fd >= 0)
+        return 0;
+
+    // Open FIFO non-blocking for writing.
+    // If there is no reader yet, open() will fail with ENXIO -> that's OK.
+    int fd = open(dev->tee_path, O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        if (errno == ENXIO || errno == ENOENT)
+            return 0; // no reader yet (or fifo missing) -> just skip
+        printf("TEE: open(%s) failed: %s (%d)\n", dev->tee_path, strerror(errno), errno);
+        return 0;
+    }
+
+    dev->tee_fd = fd;
+    printf("TEE: writing MJPEG frames to %s\n", dev->tee_path);
+    return 0;
+}
+
+static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
+{
+    if (!dev->tee_path || len == 0)
+        return;
+
+    tee_open_if_needed(dev);
+
+    if (dev->tee_fd < 0)
+        return;
+
+    // Non-blocking write; drop frame on backpressure.
+    ssize_t w = write(dev->tee_fd, ptr, len);
+    if (w < 0) {
+        if (errno == EAGAIN)
+            return; // pipe buffer full -> drop
+        if (errno == EPIPE) {
+            // Reader went away; close and try again later
+            close(dev->tee_fd);
+            dev->tee_fd = -1;
+            return;
+        }
+
+        // Other errors: close and disable until next frame.
+        printf("TEE: write failed: %s (%d)\n", strerror(errno), errno);
+        close(dev->tee_fd);
+        dev->tee_fd = -1;
+    }
+}
+
 
 static const struct uvc_frame_info uvc_frames_mjpeg[] = {
     {
@@ -483,6 +541,18 @@ static int v4l2_process_data(struct v4l2_device *dev)
     }
 
     dev->dqbuf_count++;
+
+
+     // Copy frame to tee if needed
+    void *frame_ptr = NULL;
+
+    if (dev->io == IO_METHOD_MMAP) {
+        frame_ptr = dev->mem[vbuf.index].start;
+    } else {
+        frame_ptr = (void *)(uintptr_t)vbuf.m.userptr;
+    }
+
+    tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
 #ifdef ENABLE_BUFFER_DEBUG
     printf("Dequeueing buffer at V4L2 side = %d\n", vbuf.index);
@@ -2065,6 +2135,7 @@ int main(int argc, char *argv[])
     char *uvc_devname = "/dev/video0";
     char *v4l2_devname = "/dev/video1";
     char *mjpeg_image = NULL;
+    char *tee_path = NULL;
 
     fd_set fdsv, fdsu;
     int ret, opt, nfds;
@@ -2080,7 +2151,9 @@ int main(int argc, char *argv[])
     enum usb_device_speed speed = USB_SPEED_SUPER; /* High-Speed */
     enum io_method uvc_io_method = IO_METHOD_USERPTR;
 
-    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:")) != -1) {
+    signal(SIGPIPE, SIG_IGN);
+
+    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:T:")) != -1) {
         switch (opt) {
         case 'b':
             bulk_mode = 1;
@@ -2172,6 +2245,9 @@ int main(int argc, char *argv[])
         case 'v':
             v4l2_devname = optarg;
             break;
+        case 'T':
+            tee_path = optarg;
+            break;
 
         default:
             printf("Invalid option '-%c'\n", opt);
@@ -2198,6 +2274,8 @@ int main(int argc, char *argv[])
         ret = v4l2_open(&vdev, v4l2_devname, &fmt);
         if (vdev == NULL || ret < 0)
             return 1;
+        vdev->tee_fd = -1;
+        vdev->tee_path = tee_path;
     }
 
     /* Open the UVC device. */
@@ -2355,6 +2433,9 @@ int main(int argc, char *argv[])
         uvc_video_reqbufs(udev, 0);
         udev->is_streaming = 0;
     }
+
+    if (vdev->tee_fd >= 0) 
+        close(vdev->tee_fd);
 
     if (!dummy_data_gen_mode && !mjpeg_image)
         v4l2_close(vdev);
