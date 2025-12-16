@@ -5,7 +5,7 @@ KERNEL_DIR	?= /usr/src/linux
 CC		:= $(CROSS_COMPILE)gcc
 KERNEL_INCLUDE	:= -I$(KERNEL_DIR)/include -I$(KERNEL_DIR)/arch/$(ARCH)/include
 CFLAGS    := -W -Wall -O3 $(KERNEL_INCLUDE)
-LDFLAGS   := -O3g
+LDFLAGS   := -O3g -lpthread
 
 all: uvc-gadget
 
