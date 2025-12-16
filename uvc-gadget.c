@@ -564,6 +564,19 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
 tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
+// If UVC isn't streaming yet, just give buffer back to the camera.
+if (!dev->udev->first_buffer_queued || !dev->udev->is_streaming) {
+    // re-queue the same buffer to V4L2 capture so we keep capturing
+    ret = ioctl(dev->v4l2_fd, VIDIOC_QBUF, &vbuf);
+    if (ret < 0) {
+        printf("V4L2: VIDIOC_QBUF (requeue) failed: %s (%d)\n", strerror(errno), errno);
+        return ret;
+    }
+    dev->qbuf_count++;
+    return 0;
+}
+
+
     /* Queue video buffer to UVC domain. */
     CLEAR(ubuf);
 
@@ -2384,6 +2397,17 @@ int main(int argc, char *argv[])
 
     /* Init UVC events. */
     uvc_events_init(udev);
+
+
+    if (!dummy_data_gen_mode && !mjpeg_image && tee_path) {
+    // allocate/queue buffers and start camera capture right away
+    v4l2_reqbufs(vdev, vdev->nbufs);
+    v4l2_qbuf(vdev);
+    v4l2_start_capturing(vdev);
+    vdev->is_streaming = 1;
+    printf("TEE: started V4L2 capture immediately (no USB host needed)\n");
+}
+
 
     while (1) {
         if (!dummy_data_gen_mode && !mjpeg_image)
