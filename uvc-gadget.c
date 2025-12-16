@@ -2535,15 +2535,19 @@ int main(int argc, char *argv[])
             vdev->tee_ring = tee_ring_buffer_init();
             if (!vdev->tee_ring) {
                 printf("TEE: Failed to initialize ring buffer\n");
-                v4l2_close(vdev);
+                /* Ring buffer is NULL, safe to call v4l2_close */
+                close(vdev->v4l2_fd);
+                free(vdev);
                 return 1;
             }
             
             ret = pthread_create(&vdev->tee_thread, NULL, tee_writer_thread, vdev);
             if (ret != 0) {
                 printf("TEE: Failed to create writer thread: %s\n", strerror(ret));
+                /* Thread not started, cleanup ring buffer and device manually */
                 tee_ring_buffer_destroy(vdev->tee_ring);
-                v4l2_close(vdev);
+                close(vdev->v4l2_fd);
+                free(vdev);
                 return 1;
             }
             vdev->tee_thread_running = 1;
