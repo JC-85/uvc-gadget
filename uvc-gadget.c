@@ -1326,8 +1326,7 @@ static int uvc_video_process(struct uvc_device *dev)
          * not just during shutdown. Continue processing other buffers.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            printf(
-                "UVC: Buffer returned with error flag, skipping re-queue\n");
+            printf("UVC: Buffer returned with error flag, skipping re-queue\n");
             return 0;
         }
 
