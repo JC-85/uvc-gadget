@@ -277,17 +277,17 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     return 0;
 }
 
-
-
 static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
 {
-    if (!dev->tee_path || dev->tee_fd < 0 || !ptr || len == 0)
+    if (!dev->tee_path || !ptr || len == 0)
         return;
 
-    // For non-blocking pipes, ensure we don't emit partial JPEG frames.
-    // If the pipe can't take it all, drop this frame.
-    size_t off = 0;
+    tee_open_if_needed(dev);
 
+    if (dev->tee_fd < 0)
+        return;
+
+    size_t off = 0;
     while (off < len) {
         ssize_t w = write(dev->tee_fd, (const uint8_t *)ptr + off, len - off);
         if (w > 0) {
@@ -296,9 +296,6 @@ static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len
         }
 
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            // Pipe full; drop the remainder of this frame by closing/reopening
-            // so we don't leave a partial JPEG in the stream.
-            // (Closing is heavy but safe and simple.)
             close(dev->tee_fd);
             dev->tee_fd = -1;
             return;
@@ -310,7 +307,6 @@ static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len
             return;
         }
 
-        // Any other error: disable tee for now.
         close(dev->tee_fd);
         dev->tee_fd = -1;
         return;
