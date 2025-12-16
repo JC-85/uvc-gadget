@@ -2217,6 +2217,9 @@ int main(int argc, char *argv[])
             break;
 
         case 'r':
+            printf("Default resolution requested = %s\n",
+                  (atoi(optarg) == 0) ? "720p" : (atoi(optarg) == 1) ? "1080p"
+                                                                      : "Unknown");
             if (atoi(optarg) < 0 || atoi(optarg) > 1) {
                 usage(argv[0]);
                 return 1;
@@ -2226,6 +2229,9 @@ int main(int argc, char *argv[])
             break;
 
         case 's':
+            print("USB speed requested = %s\n",
+                  (atoi(optarg) == 0) ? "Full Speed" : (atoi(optarg) == 1) ? "High Speed"
+                                                                           : "Super Speed");
             if (atoi(optarg) < 0 || atoi(optarg) > 2) {
                 usage(argv[0]);
                 return 1;
@@ -2245,13 +2251,16 @@ int main(int argc, char *argv[])
             break;
 
         case 'u':
+            printf("UVC: Device name specified as %s\n", optarg);
             uvc_devname = optarg;
             break;
 
         case 'v':
+            printf("V4L2: Device name specified as %s\n", optarg);
             v4l2_devname = optarg;
             break;
         case 'T':
+            printf("UVC: Tee path specified as %s\n", optarg);
             tee_path = optarg;
             break;
 
