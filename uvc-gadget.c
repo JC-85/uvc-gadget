@@ -144,62 +144,6 @@ static const struct uvc_frame_info uvc_frames_yuyv[] = {
     },
 };
 
-#include <signal.h>
-
-// ...
-
-static int tee_open_if_needed(struct v4l2_device *dev)
-{
-    if (!dev->tee_path)
-        return 0;
-
-    if (dev->tee_fd >= 0)
-        return 0;
-
-    // Open FIFO non-blocking for writing.
-    // If there is no reader yet, open() will fail with ENXIO -> that's OK.
-    int fd = open(dev->tee_path, O_WRONLY | O_NONBLOCK);
-    if (fd < 0) {
-        if (errno == ENXIO || errno == ENOENT)
-            return 0; // no reader yet (or fifo missing) -> just skip
-        printf("TEE: open(%s) failed: %s (%d)\n", dev->tee_path, strerror(errno), errno);
-        return 0;
-    }
-
-    dev->tee_fd = fd;
-    printf("TEE: writing MJPEG frames to %s\n", dev->tee_path);
-    return 0;
-}
-
-static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
-{
-    if (!dev->tee_path || len == 0)
-        return;
-
-    tee_open_if_needed(dev);
-
-    if (dev->tee_fd < 0)
-        return;
-
-    // Non-blocking write; drop frame on backpressure.
-    ssize_t w = write(dev->tee_fd, ptr, len);
-    if (w < 0) {
-        if (errno == EAGAIN)
-            return; // pipe buffer full -> drop
-        if (errno == EPIPE) {
-            // Reader went away; close and try again later
-            close(dev->tee_fd);
-            dev->tee_fd = -1;
-            return;
-        }
-
-        // Other errors: close and disable until next frame.
-        printf("TEE: write failed: %s (%d)\n", strerror(errno), errno);
-        close(dev->tee_fd);
-        dev->tee_fd = -1;
-    }
-}
-
 
 static const struct uvc_frame_info uvc_frames_mjpeg[] = {
     {
@@ -305,6 +249,62 @@ struct uvc_device {
 
 /* forward declarations */
 static int uvc_video_stream(struct uvc_device *dev, int enable);
+
+
+
+
+static int tee_open_if_needed(struct v4l2_device *dev)
+{
+    if (!dev->tee_path)
+        return 0;
+
+    if (dev->tee_fd >= 0)
+        return 0;
+
+    // Open FIFO non-blocking for writing.
+    // If there is no reader yet, open() will fail with ENXIO -> that's OK.
+    int fd = open(dev->tee_path, O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        if (errno == ENXIO || errno == ENOENT)
+            return 0; // no reader yet (or fifo missing) -> just skip
+        printf("TEE: open(%s) failed: %s (%d)\n", dev->tee_path, strerror(errno), errno);
+        return 0;
+    }
+
+    dev->tee_fd = fd;
+    printf("TEE: writing MJPEG frames to %s\n", dev->tee_path);
+    return 0;
+}
+
+static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
+{
+    if (!dev->tee_path || len == 0)
+        return;
+
+    tee_open_if_needed(dev);
+
+    if (dev->tee_fd < 0)
+        return;
+
+    // Non-blocking write; drop frame on backpressure.
+    ssize_t w = write(dev->tee_fd, ptr, len);
+    if (w < 0) {
+        if (errno == EAGAIN)
+            return; // pipe buffer full -> drop
+        if (errno == EPIPE) {
+            // Reader went away; close and try again later
+            close(dev->tee_fd);
+            dev->tee_fd = -1;
+            return;
+        }
+
+        // Other errors: close and disable until next frame.
+        printf("TEE: write failed: %s (%d)\n", strerror(errno), errno);
+        close(dev->tee_fd);
+        dev->tee_fd = -1;
+    }
+}
+
 
 /* ---------------------------------------------------------------------------
  * V4L2 streaming related
