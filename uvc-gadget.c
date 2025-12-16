@@ -261,8 +261,6 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     if (dev->tee_fd >= 0)
         return 0;
 
-    printf("TEE: opening FIFO %s for writing...\n", dev->tee_path);
-
     // Open FIFO non-blocking for writing.
     // If there is no reader yet, open() will fail with ENXIO -> that's OK.
     int fd = open(dev->tee_path, O_WRONLY | O_NONBLOCK);
@@ -274,36 +272,47 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     }
 
     dev->tee_fd = fd;
-    printf("TEE: writing MJPEG frames to %s\n", dev->tee_path);
+    
     return 0;
 }
 
+
+
 static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
 {
-    if (!dev->tee_path || len == 0)
+    if (!dev->tee_path || dev->tee_fd < 0 || !ptr || len == 0)
         return;
 
-    tee_open_if_needed(dev);
+    // For non-blocking pipes, ensure we don't emit partial JPEG frames.
+    // If the pipe can't take it all, drop this frame.
+    size_t off = 0;
 
-    if (dev->tee_fd < 0)
-        return;
+    while (off < len) {
+        ssize_t w = write(dev->tee_fd, (const uint8_t *)ptr + off, len - off);
+        if (w > 0) {
+            off += (size_t)w;
+            continue;
+        }
 
-    // Non-blocking write; drop frame on backpressure.
-    ssize_t w = write(dev->tee_fd, ptr, len);
-    if (w < 0) {
-        if (errno == EAGAIN)
-            return; // pipe buffer full -> drop
-        if (errno == EPIPE) {
-            // Reader went away; close and try again later
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // Pipe full; drop the remainder of this frame by closing/reopening
+            // so we don't leave a partial JPEG in the stream.
+            // (Closing is heavy but safe and simple.)
             close(dev->tee_fd);
             dev->tee_fd = -1;
             return;
         }
 
-        // Other errors: close and disable until next frame.
-        printf("TEE: write failed: %s (%d)\n", strerror(errno), errno);
+        if (w < 0 && errno == EPIPE) {
+            close(dev->tee_fd);
+            dev->tee_fd = -1;
+            return;
+        }
+
+        // Any other error: disable tee for now.
         close(dev->tee_fd);
         dev->tee_fd = -1;
+        return;
     }
 }
 
