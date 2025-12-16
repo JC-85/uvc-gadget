@@ -249,6 +249,10 @@ struct v4l2_device {
 
     /* uvc device hook */
     struct uvc_device *udev;
+
+    int tee_fd;
+    char *tee_path;
+
 };
 
 /* Represents a UVC based video output device */
