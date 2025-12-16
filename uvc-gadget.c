@@ -1321,17 +1321,12 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, do not queue the same to V4l2
-         * and wait for a STREAMOFF event on UVC side corresponding to
-         * set_alt(0). So, now all buffers pending at UVC end will be
-         * dequeued one-by-one and we will enter a state where we once
-         * again wait for a set_alt(1) command from the USB host side.
+         * underlying UVC driver gadget, do not queue the same to V4l2.
+         * This can happen during normal operation (e.g., host pausing),
+         * not just during shutdown. Continue processing other buffers.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            dev->uvc_shutdown_requested = 1;
-            printf(
-                "UVC: Possible USB shutdown requested from "
-                "Host, seen during VIDIOC_DQBUF\n");
+            printf("UVC: Buffer returned with error flag, skipping re-queue\n");
             return 0;
         }
 
@@ -2704,8 +2699,13 @@ int main(int argc, char *argv[])
         }
 
         if (0 == ret) {
-            printf("select timeout\n");
-            break;
+            /* Only exit on timeout if shutdown was requested */
+            if (udev->uvc_shutdown_requested) {
+                printf("select timeout after shutdown request\n");
+                break;
+            }
+            /* Otherwise continue - timeout is normal when idle */
+            continue;
         }
 
         if (FD_ISSET(udev->uvc_fd, &efds))
