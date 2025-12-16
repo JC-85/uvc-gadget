@@ -2700,8 +2700,13 @@ int main(int argc, char *argv[])
         }
 
         if (0 == ret) {
-            printf("select timeout\n");
-            break;
+            /* Only exit on timeout if shutdown was requested */
+            if (udev->uvc_shutdown_requested) {
+                printf("select timeout after shutdown request\n");
+                break;
+            }
+            /* Otherwise continue - timeout is normal when idle */
+            continue;
         }
 
         if (FD_ISSET(udev->uvc_fd, &efds))
