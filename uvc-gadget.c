@@ -32,6 +32,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/video.h>
@@ -106,6 +107,24 @@ struct buffer {
     struct v4l2_buffer buf;
     void *start;
     size_t length;
+};
+
+/* Ring buffer entry for TEE frames */
+struct tee_frame {
+    void *data;
+    size_t size;
+};
+
+/* Ring buffer for TEE frames */
+#define TEE_RING_BUFFER_SIZE 8
+struct tee_ring_buffer {
+    struct tee_frame frames[TEE_RING_BUFFER_SIZE];
+    unsigned int write_idx;
+    unsigned int read_idx;
+    unsigned int count;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int shutdown;
 };
 
 /* ---------------------------------------------------------------------------
@@ -196,6 +215,11 @@ struct v4l2_device {
 
     int tee_fd;
     char *tee_path;
+    
+    /* TEE ring buffer and thread */
+    struct tee_ring_buffer *tee_ring;
+    pthread_t tee_thread;
+    int tee_thread_running;
 
 };
 
@@ -251,6 +275,122 @@ struct uvc_device {
 static int uvc_video_stream(struct uvc_device *dev, int enable);
 
 
+/* ---------------------------------------------------------------------------
+ * TEE ring buffer operations
+ */
+
+static struct tee_ring_buffer *tee_ring_buffer_init(void)
+{
+    struct tee_ring_buffer *ring = calloc(1, sizeof(*ring));
+    if (!ring)
+        return NULL;
+    
+    pthread_mutex_init(&ring->lock, NULL);
+    pthread_cond_init(&ring->cond, NULL);
+    ring->write_idx = 0;
+    ring->read_idx = 0;
+    ring->count = 0;
+    ring->shutdown = 0;
+    
+    return ring;
+}
+
+static void tee_ring_buffer_destroy(struct tee_ring_buffer *ring)
+{
+    if (!ring)
+        return;
+    
+    pthread_mutex_lock(&ring->lock);
+    
+    /* Free any remaining frames */
+    for (unsigned int i = 0; i < ring->count; i++) {
+        unsigned int idx = (ring->read_idx + i) % TEE_RING_BUFFER_SIZE;
+        free(ring->frames[idx].data);
+        ring->frames[idx].data = NULL;
+    }
+    
+    pthread_mutex_unlock(&ring->lock);
+    
+    pthread_mutex_destroy(&ring->lock);
+    pthread_cond_destroy(&ring->cond);
+    free(ring);
+}
+
+static int tee_ring_buffer_push(struct tee_ring_buffer *ring, const void *data, size_t size)
+{
+    if (!ring || !data || size == 0)
+        return -1;
+    
+    pthread_mutex_lock(&ring->lock);
+    
+    if (ring->shutdown) {
+        pthread_mutex_unlock(&ring->lock);
+        return -1;
+    }
+    
+    /* If buffer is full, drop the oldest frame */
+    if (ring->count == TEE_RING_BUFFER_SIZE) {
+        printf("TEE: Ring buffer full, dropping oldest frame\n");
+        free(ring->frames[ring->read_idx].data);
+        ring->frames[ring->read_idx].data = NULL;
+        ring->read_idx = (ring->read_idx + 1) % TEE_RING_BUFFER_SIZE;
+        ring->count--;
+    }
+    
+    /* Allocate and copy frame data */
+    ring->frames[ring->write_idx].data = malloc(size);
+    if (!ring->frames[ring->write_idx].data) {
+        pthread_mutex_unlock(&ring->lock);
+        return -1;
+    }
+    
+    memcpy(ring->frames[ring->write_idx].data, data, size);
+    ring->frames[ring->write_idx].size = size;
+    
+    ring->write_idx = (ring->write_idx + 1) % TEE_RING_BUFFER_SIZE;
+    ring->count++;
+    
+    pthread_cond_signal(&ring->cond);
+    pthread_mutex_unlock(&ring->lock);
+    
+    return 0;
+}
+
+static struct tee_frame *tee_ring_buffer_pop(struct tee_ring_buffer *ring)
+{
+    if (!ring)
+        return NULL;
+    
+    pthread_mutex_lock(&ring->lock);
+    
+    while (ring->count == 0 && !ring->shutdown) {
+        pthread_cond_wait(&ring->cond, &ring->lock);
+    }
+    
+    if (ring->shutdown && ring->count == 0) {
+        pthread_mutex_unlock(&ring->lock);
+        return NULL;
+    }
+    
+    struct tee_frame *frame = &ring->frames[ring->read_idx];
+    ring->read_idx = (ring->read_idx + 1) % TEE_RING_BUFFER_SIZE;
+    ring->count--;
+    
+    pthread_mutex_unlock(&ring->lock);
+    
+    return frame;
+}
+
+static void tee_ring_buffer_shutdown(struct tee_ring_buffer *ring)
+{
+    if (!ring)
+        return;
+    
+    pthread_mutex_lock(&ring->lock);
+    ring->shutdown = 1;
+    pthread_cond_broadcast(&ring->cond);
+    pthread_mutex_unlock(&ring->lock);
+}
 
 
 static int tee_open_if_needed(struct v4l2_device *dev)
@@ -261,7 +401,7 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     if (dev->tee_fd >= 0)
         return 0;
 
-        printf("TEE: opening FIFO %s\n", dev->tee_path);
+    printf("TEE: opening FIFO %s\n", dev->tee_path);
     // Open FIFO non-blocking for writing.
     // If there is no reader yet, open() will fail with ENXIO -> that's OK.
     int fd = open(dev->tee_path, O_RDWR | O_NONBLOCK);
@@ -277,40 +417,79 @@ static int tee_open_if_needed(struct v4l2_device *dev)
     return 0;
 }
 
+/* TEE writer thread that reads from ring buffer and writes to FIFO */
+static void *tee_writer_thread(void *arg)
+{
+    struct v4l2_device *dev = (struct v4l2_device *)arg;
+    
+    printf("TEE: Writer thread started\n");
+    
+    while (1) {
+        struct tee_frame *frame = tee_ring_buffer_pop(dev->tee_ring);
+        if (!frame) {
+            /* Shutdown requested */
+            break;
+        }
+        
+        /* Try to open FIFO if not already open */
+        if (dev->tee_fd < 0) {
+            tee_open_if_needed(dev);
+            if (dev->tee_fd < 0) {
+                /* No reader yet, drop frame and continue */
+                free(frame->data);
+                continue;
+            }
+        }
+        
+        /* Write complete frame to FIFO */
+        size_t off = 0;
+        while (off < frame->size) {
+            ssize_t w = write(dev->tee_fd, (const uint8_t *)frame->data + off, frame->size - off);
+            if (w > 0) {
+                off += (size_t)w;
+                continue;
+            }
+            
+            if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                /* FIFO is full, close and reopen later */
+                close(dev->tee_fd);
+                dev->tee_fd = -1;
+                break;
+            }
+            
+            if (w < 0 && errno == EPIPE) {
+                /* Reader disconnected */
+                close(dev->tee_fd);
+                dev->tee_fd = -1;
+                break;
+            }
+            
+            if (w < 0) {
+                /* Other error */
+                close(dev->tee_fd);
+                dev->tee_fd = -1;
+                break;
+            }
+        }
+        
+        /* Free frame data */
+        free(frame->data);
+    }
+    
+    printf("TEE: Writer thread exiting\n");
+    return NULL;
+}
+
 static void tee_write_frame(struct v4l2_device *dev, const void *ptr, size_t len)
 {
     if (!dev->tee_path || !ptr || len == 0)
         return;
-
-    tee_open_if_needed(dev);
-
-    if (dev->tee_fd < 0)
+    
+    if (!dev->tee_ring)
         return;
-
-    size_t off = 0;
-    while (off < len) {
-        ssize_t w = write(dev->tee_fd, (const uint8_t *)ptr + off, len - off);
-        if (w > 0) {
-            off += (size_t)w;
-            continue;
-        }
-
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            close(dev->tee_fd);
-            dev->tee_fd = -1;
-            return;
-        }
-
-        if (w < 0 && errno == EPIPE) {
-            close(dev->tee_fd);
-            dev->tee_fd = -1;
-            return;
-        }
-
-        close(dev->tee_fd);
-        dev->tee_fd = -1;
-        return;
-    }
+    
+    /* Enqueue frame to ring buffer for async writing */
+    tee_ring_buffer_push(dev->tee_ring, ptr, len);
 }
 
 
@@ -836,6 +1015,25 @@ err:
 
 static void v4l2_close(struct v4l2_device *dev)
 {
+    /* Shutdown TEE writer thread if running */
+    if (dev->tee_thread_running) {
+        tee_ring_buffer_shutdown(dev->tee_ring);
+        pthread_join(dev->tee_thread, NULL);
+        dev->tee_thread_running = 0;
+    }
+    
+    /* Cleanup ring buffer */
+    if (dev->tee_ring) {
+        tee_ring_buffer_destroy(dev->tee_ring);
+        dev->tee_ring = NULL;
+    }
+    
+    /* Close TEE FIFO if open */
+    if (dev->tee_fd >= 0) {
+        close(dev->tee_fd);
+        dev->tee_fd = -1;
+    }
+    
     close(dev->v4l2_fd);
     free(dev);
 }
@@ -2310,6 +2508,28 @@ int main(int argc, char *argv[])
             return 1;
         vdev->tee_fd = -1;
         vdev->tee_path = tee_path;
+        vdev->tee_ring = NULL;
+        vdev->tee_thread_running = 0;
+        
+        /* Initialize TEE ring buffer and writer thread if tee_path is set */
+        if (tee_path) {
+            vdev->tee_ring = tee_ring_buffer_init();
+            if (!vdev->tee_ring) {
+                printf("TEE: Failed to initialize ring buffer\n");
+                v4l2_close(vdev);
+                return 1;
+            }
+            
+            ret = pthread_create(&vdev->tee_thread, NULL, tee_writer_thread, vdev);
+            if (ret != 0) {
+                printf("TEE: Failed to create writer thread: %s\n", strerror(ret));
+                tee_ring_buffer_destroy(vdev->tee_ring);
+                v4l2_close(vdev);
+                return 1;
+            }
+            vdev->tee_thread_running = 1;
+            printf("TEE: Ring buffer and writer thread initialized\n");
+        }
     }
 
     /* Open the UVC device. */
