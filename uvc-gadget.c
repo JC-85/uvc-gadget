@@ -285,8 +285,17 @@ static struct tee_ring_buffer *tee_ring_buffer_init(void)
     if (!ring)
         return NULL;
     
-    pthread_mutex_init(&ring->lock, NULL);
-    pthread_cond_init(&ring->cond, NULL);
+    if (pthread_mutex_init(&ring->lock, NULL) != 0) {
+        free(ring);
+        return NULL;
+    }
+    
+    if (pthread_cond_init(&ring->cond, NULL) != 0) {
+        pthread_mutex_destroy(&ring->lock);
+        free(ring);
+        return NULL;
+    }
+    
     ring->write_idx = 0;
     ring->read_idx = 0;
     ring->count = 0;
@@ -321,30 +330,36 @@ static int tee_ring_buffer_push(struct tee_ring_buffer *ring, const void *data, 
     if (!ring || !data || size == 0)
         return -1;
     
+    /* Allocate memory outside critical section */
+    void *frame_data = malloc(size);
+    if (!frame_data)
+        return -1;
+    
+    memcpy(frame_data, data, size);
+    
     pthread_mutex_lock(&ring->lock);
     
     if (ring->shutdown) {
         pthread_mutex_unlock(&ring->lock);
+        free(frame_data);
         return -1;
     }
     
     /* If buffer is full, drop the oldest frame */
     if (ring->count == TEE_RING_BUFFER_SIZE) {
-        printf("TEE: Ring buffer full, dropping oldest frame\n");
+        /* Use a static counter to rate-limit logging */
+        static unsigned int drop_count = 0;
+        if ((drop_count++ % 100) == 0) {
+            printf("TEE: Ring buffer full, dropped %u frames so far\n", drop_count);
+        }
         free(ring->frames[ring->read_idx].data);
         ring->frames[ring->read_idx].data = NULL;
         ring->read_idx = (ring->read_idx + 1) % TEE_RING_BUFFER_SIZE;
         ring->count--;
     }
     
-    /* Allocate and copy frame data */
-    ring->frames[ring->write_idx].data = malloc(size);
-    if (!ring->frames[ring->write_idx].data) {
-        pthread_mutex_unlock(&ring->lock);
-        return -1;
-    }
-    
-    memcpy(ring->frames[ring->write_idx].data, data, size);
+    /* Store frame data */
+    ring->frames[ring->write_idx].data = frame_data;
     ring->frames[ring->write_idx].size = size;
     
     ring->write_idx = (ring->write_idx + 1) % TEE_RING_BUFFER_SIZE;
@@ -356,10 +371,10 @@ static int tee_ring_buffer_push(struct tee_ring_buffer *ring, const void *data, 
     return 0;
 }
 
-static struct tee_frame *tee_ring_buffer_pop(struct tee_ring_buffer *ring)
+static int tee_ring_buffer_pop(struct tee_ring_buffer *ring, struct tee_frame *out_frame)
 {
-    if (!ring)
-        return NULL;
+    if (!ring || !out_frame)
+        return -1;
     
     pthread_mutex_lock(&ring->lock);
     
@@ -369,16 +384,20 @@ static struct tee_frame *tee_ring_buffer_pop(struct tee_ring_buffer *ring)
     
     if (ring->shutdown && ring->count == 0) {
         pthread_mutex_unlock(&ring->lock);
-        return NULL;
+        return -1;
     }
     
-    struct tee_frame *frame = &ring->frames[ring->read_idx];
+    /* Copy frame data to output, transferring ownership */
+    *out_frame = ring->frames[ring->read_idx];
+    ring->frames[ring->read_idx].data = NULL;
+    ring->frames[ring->read_idx].size = 0;
+    
     ring->read_idx = (ring->read_idx + 1) % TEE_RING_BUFFER_SIZE;
     ring->count--;
     
     pthread_mutex_unlock(&ring->lock);
     
-    return frame;
+    return 0;
 }
 
 static void tee_ring_buffer_shutdown(struct tee_ring_buffer *ring)
@@ -421,12 +440,12 @@ static int tee_open_if_needed(struct v4l2_device *dev)
 static void *tee_writer_thread(void *arg)
 {
     struct v4l2_device *dev = (struct v4l2_device *)arg;
+    struct tee_frame frame;
     
     printf("TEE: Writer thread started\n");
     
     while (1) {
-        struct tee_frame *frame = tee_ring_buffer_pop(dev->tee_ring);
-        if (!frame) {
+        if (tee_ring_buffer_pop(dev->tee_ring, &frame) != 0) {
             /* Shutdown requested */
             break;
         }
@@ -436,15 +455,15 @@ static void *tee_writer_thread(void *arg)
             tee_open_if_needed(dev);
             if (dev->tee_fd < 0) {
                 /* No reader yet, drop frame and continue */
-                free(frame->data);
+                free(frame.data);
                 continue;
             }
         }
         
         /* Write complete frame to FIFO */
         size_t off = 0;
-        while (off < frame->size) {
-            ssize_t w = write(dev->tee_fd, (const uint8_t *)frame->data + off, frame->size - off);
+        while (off < frame.size) {
+            ssize_t w = write(dev->tee_fd, (const uint8_t *)frame.data + off, frame.size - off);
             if (w > 0) {
                 off += (size_t)w;
                 continue;
@@ -473,7 +492,7 @@ static void *tee_writer_thread(void *arg)
         }
         
         /* Free frame data */
-        free(frame->data);
+        free(frame.data);
     }
     
     printf("TEE: Writer thread exiting\n");
