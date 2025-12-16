@@ -489,10 +489,13 @@ static void *tee_writer_thread(void *arg)
                 continue;
             }
             
-            /* With blocking I/O, EAGAIN shouldn't occur, but handle it just in case */
+            /* With blocking I/O, EAGAIN/EWOULDBLOCK should never occur */
             if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                /* Shouldn't happen with blocking I/O, but if it does, retry */
-                continue;
+                /* This indicates a bug - blocking I/O should never return EAGAIN */
+                printf("TEE: Unexpected EAGAIN/EWOULDBLOCK with blocking I/O\n");
+                close(dev->tee_fd);
+                dev->tee_fd = -1;
+                break;
             }
             
             if (w < 0 && errno == EPIPE) {
