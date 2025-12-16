@@ -2229,7 +2229,7 @@ int main(int argc, char *argv[])
             break;
 
         case 's':
-            print("USB speed requested = %s\n",
+            printf("USB speed requested = %s\n",
                   (atoi(optarg) == 0) ? "Full Speed" : (atoi(optarg) == 1) ? "High Speed"
                                                                            : "Super Speed");
             if (atoi(optarg) < 0 || atoi(optarg) > 2) {
