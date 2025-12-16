@@ -548,6 +548,9 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     dev->dqbuf_count++;
 
+#ifdef ENABLE_BUFFER_DEBUG
+    printf("Dequeueing buffer at V4L2 side = %d\n", vbuf.index);
+#endif
 
      // Copy frame to tee if needed
     void *frame_ptr = NULL;
@@ -558,11 +561,8 @@ static int v4l2_process_data(struct v4l2_device *dev)
         frame_ptr = (void *)(uintptr_t)vbuf.m.userptr;
     }
 
-    tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
-#ifdef ENABLE_BUFFER_DEBUG
-    printf("Dequeueing buffer at V4L2 side = %d\n", vbuf.index);
-#endif
+tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
     /* Queue video buffer to UVC domain. */
     CLEAR(ubuf);
@@ -2374,8 +2374,9 @@ int main(int argc, char *argv[])
         /*
          * Ensure that the V4L2 video capture device has already some
          * buffers queued.
-         */
+         */         
         v4l2_reqbufs(vdev, vdev->nbufs);
+        printf("Queuing %d buffers at V4L2 device\n", vdev->nbufs);
     }
 
     if (mjpeg_image)
