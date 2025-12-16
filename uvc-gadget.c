@@ -432,6 +432,23 @@ static int tee_open_if_needed(struct v4l2_device *dev)
         return 0;
     }
 
+    // Clear O_NONBLOCK flag to make writes blocking.
+    // This ensures complete MJPEG frames are written atomically,
+    // avoiding "[mjpeg @ 0x...] EOI missing, emulating" errors in ffmpeg.
+    int flags = fcntl(fd, F_GETFL);
+    if (flags >= 0) {
+        flags &= ~O_NONBLOCK;
+        if (fcntl(fd, F_SETFL, flags) < 0) {
+            printf("TEE: fcntl(F_SETFL) failed: %s (%d)\n", strerror(errno), errno);
+            close(fd);
+            return 0;
+        }
+    } else {
+        printf("TEE: fcntl(F_GETFL) failed: %s (%d)\n", strerror(errno), errno);
+        close(fd);
+        return 0;
+    }
+
     dev->tee_fd = fd;
     #ifdef DEBUG
     printf("TEE: opened FIFO %s, fd=%d\n", dev->tee_path, dev->tee_fd);
@@ -463,7 +480,7 @@ static void *tee_writer_thread(void *arg)
             }
         }
         
-        /* Write complete frame to FIFO */
+        /* Write complete frame to FIFO (blocking mode ensures atomic writes) */
         size_t off = 0;
         while (off < frame.size) {
             ssize_t w = write(dev->tee_fd, (const uint8_t *)frame.data + off, frame.size - off);
@@ -472,22 +489,25 @@ static void *tee_writer_thread(void *arg)
                 continue;
             }
             
+            /* With blocking I/O, EAGAIN/EWOULDBLOCK should never occur */
             if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                /* FIFO is full, close and reopen later */
+                /* This indicates a bug - blocking I/O should never return EAGAIN */
+                printf("TEE: Unexpected EAGAIN/EWOULDBLOCK with blocking I/O\n");
                 close(dev->tee_fd);
                 dev->tee_fd = -1;
                 break;
             }
             
             if (w < 0 && errno == EPIPE) {
-                /* Reader disconnected */
+                /* Reader disconnected - close FIFO and will reopen for next frame */
                 close(dev->tee_fd);
                 dev->tee_fd = -1;
                 break;
             }
             
             if (w < 0) {
-                /* Other error */
+                /* Other error - close FIFO */
+                printf("TEE: write error: %s (%d)\n", strerror(errno), errno);
                 close(dev->tee_fd);
                 dev->tee_fd = -1;
                 break;
