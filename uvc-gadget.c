@@ -775,8 +775,10 @@ static int v4l2_process_data(struct v4l2_device *dev)
     struct v4l2_buffer ubuf;
 
     /* Return immediately if V4l2 streaming has not yet started. */
-    if (!dev->is_streaming)
+    if (!dev->is_streaming) {
+        DEBUG_PRINT("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
         return 0;
+    }
 
     if (dev->udev->first_buffer_queued)
         if (dev->dqbuf_count >= dev->qbuf_count)
@@ -2334,11 +2336,12 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->width = frame->width;
         dev->height = frame->height;
         if (!quiet_mode) {
-            printf("COMMIT: Selected %ux%u interval=%u (%.2f fps), buffer size=%u bytes\n",
+            printf("COMMIT: Selected %ux%u interval=%u (%.2f fps), buffer size=%u bytes, format=%c%c%c%c\n",
                    frame->width, frame->height,
                    target->dwFrameInterval,
                    target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0,
-                   target->dwMaxVideoFrameSize);
+                   target->dwMaxVideoFrameSize,
+                   pixfmtstr(dev->fcc));
         }
         
         /* For bulk mode, streaming starts on COMMIT (not on STREAMON event) */
@@ -2394,11 +2397,15 @@ static void uvc_events_process(struct uvc_device *dev)
         return;
 
     case UVC_EVENT_STREAMON:
+        if (!quiet_mode)
+            printf("UVC: EVENT_STREAMON (bulk=%d)\n", dev->bulk);
         if (!dev->bulk)
             uvc_handle_streamon_event(dev);
         return;
 
     case UVC_EVENT_STREAMOFF:
+        if (!quiet_mode)
+            printf("UVC: EVENT_STREAMOFF\n");
         /* Clear shutdown flag - stream is cleanly stopped, ready for restart */
         dev->uvc_shutdown_requested = 0;
 
