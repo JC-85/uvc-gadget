@@ -92,6 +92,14 @@
 #define PU_BRIGHTNESS_STEP_SIZE 1
 #define PU_BRIGHTNESS_DEFAULT_VAL 55
 
+/*
+ * MJPEG compression ratio estimate for frame size calculations.
+ * MJPEG compression varies significantly based on image content,
+ * but 0.5 (divide by 2) is a conservative upper bound estimate
+ * that provides sufficient buffer space for most content.
+ */
+#define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
+
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -1729,12 +1737,13 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         break;
     case V4L2_PIX_FMT_MJPEG:
         /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height * 0.5 is a reasonable upper bound.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound.
          */
         if (dev->imgsize > 0) {
             ctrl->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / 2;
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
         }
         break;
     }
@@ -2224,13 +2233,14 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         break;
     case V4L2_PIX_FMT_MJPEG:
         /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height * 0.5 is a reasonable upper bound.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound.
          */
         if (dev->imgsize > 0) {
             target->dwMaxVideoFrameSize = dev->imgsize;
         } else {
             printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
-            target->dwMaxVideoFrameSize = frame->width * frame->height / 2;
+            target->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
         }
         break;
     }
