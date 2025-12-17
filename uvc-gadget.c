@@ -2340,6 +2340,13 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
                    target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0,
                    target->dwMaxVideoFrameSize);
         }
+        
+        /* For bulk mode, streaming starts on COMMIT (not on STREAMON event) */
+        if (dev->bulk) {
+            ret = uvc_handle_streamon_event(dev);
+            if (ret < 0)
+                goto err;
+        }
     }
 
     return 0;
