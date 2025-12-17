@@ -90,6 +90,8 @@ echo "✓ 720p frame intervals verified: 30fps, 15fps, 1fps"
 
 STREAMING_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming"
 mkdir -p "$STREAMING_DIR/header/h"
+mkdir -p "$STREAMING_DIR/class/fs"
+mkdir -p "$STREAMING_DIR/class/hs"
 [ ! -L "$STREAMING_DIR/header/h/m" ] && \
     ln -s "../../mjpeg/m" "$STREAMING_DIR/header/h/m"
 [ ! -L "$STREAMING_DIR/class/fs/h" ] && \
