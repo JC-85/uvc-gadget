@@ -1146,9 +1146,15 @@ static int uvc_video_set_format(struct uvc_device *dev)
         return ret;
     }
 
-    if (!quiet_mode)
+    if (!quiet_mode) {
+        /* Note: VIDIOC_S_FMT may modify fmt with what driver actually set */
         printf("UVC: Setting format to: %c%c%c%c %ux%u, sizeimage=%u\n", 
-               pixfmtstr(dev->fcc), dev->width, dev->height, fmt.fmt.pix.sizeimage);
+               pixfmtstr(fmt.fmt.pix.pixelformat), fmt.fmt.pix.width, fmt.fmt.pix.height, fmt.fmt.pix.sizeimage);
+        if (fmt.fmt.pix.pixelformat != dev->fcc) {
+            printf("UVC: WARNING - Driver changed format from %c%c%c%c to %c%c%c%c\n",
+                   pixfmtstr(dev->fcc), pixfmtstr(fmt.fmt.pix.pixelformat));
+        }
+    }
 
     return 0;
 }
