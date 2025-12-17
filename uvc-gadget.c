@@ -858,7 +858,10 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
     switch (dev->udev->io) {
     case IO_METHOD_MMAP:
         ubuf.memory = V4L2_MEMORY_MMAP;
-        ubuf.length = vbuf.length;
+        /* Use UVC buffer's actual allocated length, not V4L2's length.
+         * V4L2 camera driver may allocate different sized buffers than UVC expects.
+         * We must use the UVC buffer length that was allocated via VIDIOC_REQBUFS. */
+        ubuf.length = dev->udev->mem[vbuf.index].length;
         ubuf.index = vbuf.index;
         ubuf.bytesused = vbuf.bytesused;
         break;
