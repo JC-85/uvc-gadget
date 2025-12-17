@@ -86,6 +86,12 @@ static int quiet_mode = 0;
 #define ARRAY_SIZE(a) ((sizeof(a) / sizeof(a[0])))
 #define pixfmtstr(x) (x) & 0xff, ((x) >> 8) & 0xff, ((x) >> 16) & 0xff, ((x) >> 24) & 0xff
 
+struct uvc_device;
+
+static size_t uvc_default_frame_size(unsigned int width, unsigned int height);
+static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height);
+static size_t uvc_active_frame_size(const struct uvc_device *dev);
+
 /*
  * The UVC webcam gadget kernel driver (g_webcam.ko) supports changing
  * the Brightness attribute of the Processing Unit (PU). by default. If
@@ -310,6 +316,25 @@ static unsigned int uvc_max_payload(const struct uvc_device *dev)
     if (max_payload == 0)
         max_payload = dev->maxpkt;
     return max_payload;
+}
+
+static size_t uvc_default_frame_size(unsigned int width, unsigned int height)
+{
+    return (size_t)width * height * 2;
+}
+
+static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height)
+{
+    size_t fallback = uvc_default_frame_size(width, height);
+    size_t negotiated = dev->imgsize ? dev->imgsize : fallback;
+
+    /* Never allow the negotiated size to be smaller than the raw frame footprint. */
+    return max(negotiated, fallback);
+}
+
+static size_t uvc_active_frame_size(const struct uvc_device *dev)
+{
+    return uvc_negotiated_frame_size(dev, dev->width, dev->height);
 }
 
 
@@ -676,7 +701,7 @@ static int v4l2_reqbufs_mmap(struct v4l2_device *dev, int nbufs)
         }
 
         dev->mem[i].length = dev->mem[i].buf.length;
-        printf("V4L2: Buffer %u mapped at address %p, length %d.\n", i, dev->mem[i].start, dev->mem[i].length);
+        printf("V4L2: Buffer %u mapped at address %p, length %zu.\n", i, dev->mem[i].start, dev->mem[i].length);
     }
 
     dev->nbufs = req.count;
@@ -876,6 +901,21 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         break;
     }
 
+    {
+        unsigned int capacity = 0;
+        if (dev->udev->io == IO_METHOD_MMAP && dev->udev->mem) {
+            capacity = dev->udev->mem[ubuf.index].length;
+        } else {
+            capacity = ubuf.length;
+        }
+
+        if (capacity > 0 && ubuf.bytesused > capacity) {
+            if (!quiet_mode)
+                printf("UVC: Clamping buffer %u from %u to %u bytes to fit allocated size\n", ubuf.index,
+                       ubuf.bytesused, capacity);
+            ubuf.bytesused = capacity;
+        }
+    }
     DEBUG_PRINT("UVC: Queueing buffer index=%d, length=%u, bytesused=%u (V4L2 length was %u)\n",
                ubuf.index, ubuf.length, ubuf.bytesused, vbuf.length);
 
@@ -1172,14 +1212,9 @@ static int uvc_video_set_format(struct uvc_device *dev)
     fmt.fmt.pix.height = dev->height;
     fmt.fmt.pix.pixelformat = dev->fcc;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    
-    /* Set sizeimage to match what we negotiated in COMMIT.
-     * For MJPEG, use width*height*2 to provide adequate buffer space.
-     * For YUYV, it's also width*height*2 (2 bytes per pixel).
-     */
-    if (dev->fcc == V4L2_PIX_FMT_MJPEG || dev->fcc == V4L2_PIX_FMT_YUYV) {
-        fmt.fmt.pix.sizeimage = dev->width * dev->height * 2;
-    }
+
+    /* Set sizeimage to match what we negotiated in COMMIT and ensure buffers are large enough. */
+    fmt.fmt.pix.sizeimage = (unsigned int)uvc_active_frame_size(dev);
 
     ret = ioctl(dev->uvc_fd, VIDIOC_S_FMT, &fmt);
     if (ret < 0) {
@@ -1320,20 +1355,47 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
 {
     unsigned int bpl;
     unsigned int i;
+    size_t buffer_capacity = dev->mem ? dev->mem[buf->index].length : 0;
 
     switch (dev->fcc) {
     case V4L2_PIX_FMT_YUYV:
         /* Fill the buffer with video data. */
         bpl = dev->width * 2;
-        for (i = 0; i < dev->height; ++i)
-            memset(dev->mem[buf->index].start + i * bpl, dev->color++, bpl);
+        {
+            size_t required = (size_t)bpl * dev->height;
+            size_t bytes_to_write = required;
 
-        buf->bytesused = bpl * dev->height;
+            if (bytes_to_write > buffer_capacity && buffer_capacity > 0) {
+                bytes_to_write = buffer_capacity - (buffer_capacity % bpl);
+                if (!quiet_mode)
+                    printf("UVC: Truncating YUYV fill from %zu to %zu bytes to fit buffer %u\n", required,
+                           bytes_to_write, buf->index);
+            }
+
+            for (i = 0; i < bytes_to_write / bpl; ++i)
+                memset(dev->mem[buf->index].start + i * bpl, dev->color++, bpl);
+
+            buf->bytesused = bytes_to_write;
+        }
         break;
 
     case V4L2_PIX_FMT_MJPEG:
-        memcpy(dev->mem[buf->index].start, dev->imgdata, dev->imgsize);
-        buf->bytesused = dev->imgsize;
+        {
+            size_t copy_size = dev->imgsize ? dev->imgsize : buffer_capacity;
+
+            if (copy_size > buffer_capacity && buffer_capacity > 0) {
+                if (!quiet_mode)
+                    printf("UVC: Truncating MJPEG payload from %zu to %zu bytes to fit buffer %u\n", copy_size,
+                           buffer_capacity, buf->index);
+                copy_size = buffer_capacity;
+            }
+
+            if (dev->imgdata && copy_size) {
+                memcpy(dev->mem[buf->index].start, dev->imgdata, copy_size);
+            }
+
+            buf->bytesused = copy_size;
+        }
         break;
     }
 }
@@ -1621,6 +1683,10 @@ static int uvc_video_reqbufs_mmap(struct uvc_device *dev, int nbufs)
         }
 
         dev->mem[i].length = dev->mem[i].buf.length;
+        if (dev->mem[i].length < uvc_active_frame_size(dev) && !quiet_mode) {
+            printf("UVC: WARNING - buffer %u length %zu is smaller than required frame size %zu\n", i,
+                   dev->mem[i].length, uvc_active_frame_size(dev));
+        }
         printf("UVC: Buffer %u mapped at address %p.\n", i, dev->mem[i].start);
     }
 
@@ -1673,15 +1739,8 @@ static int uvc_video_reqbufs_userptr(struct uvc_device *dev, int nbufs)
             goto err;
         }
 
-        switch (dev->fcc) {
-        case V4L2_PIX_FMT_YUYV:
-            bpl = dev->width * 2;
-            payload_size = dev->width * dev->height * 2;
-            break;
-        case V4L2_PIX_FMT_MJPEG:
-            payload_size = dev->imgsize;
-            break;
-        }
+        bpl = dev->width * 2;
+        payload_size = (unsigned int)uvc_active_frame_size(dev);
 
         for (i = 0; i < rb.count; ++i) {
             dev->dummy_buf[i].length = payload_size;
@@ -1743,24 +1802,10 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
 {
     int ret;
     struct v4l2_format vfmt;
-    unsigned int frame_size = dev->imgsize;
+    size_t frame_size = uvc_active_frame_size(dev);
 
     /* Clear shutdown flag - we're starting a new stream */
     dev->uvc_shutdown_requested = 0;
-
-    if (!frame_size) {
-        /* Fallback to an uncompressed frame size if the negotiated size is absent. */
-        frame_size = dev->width * dev->height * 2;
-    }
-
-    /* Set the UVC format with proper buffer size before allocating buffers */
-    ret = uvc_video_set_format(dev);
-    if (ret < 0)
-        goto err;
-
-    ret = uvc_video_reqbufs(dev, dev->nbufs);
-    if (ret < 0)
-        goto err;
 
     if (!dev->run_standalone) {
         /* UVC - V4L2 integrated path. */
@@ -1770,7 +1815,7 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         vfmt.fmt.pix.height = dev->height;
         vfmt.fmt.pix.pixelformat = dev->fcc;
         vfmt.fmt.pix.field = V4L2_FIELD_ANY;
-        vfmt.fmt.pix.sizeimage = frame_size;
+        vfmt.fmt.pix.sizeimage = (unsigned int)frame_size;
 
         /* Stop any active capture before reconfiguring buffers. */
         if (dev->vdev->is_streaming) {
@@ -1804,6 +1849,15 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         if (ret < 0)
             goto err;
 
+        /* Match UVC buffer sizing to the V4L2 capture buffers exactly. */
+        if (dev->vdev->io == IO_METHOD_MMAP && dev->vdev->mem && dev->vdev->nbufs > 0) {
+            frame_size = dev->vdev->mem[0].length;
+        } else if (vfmt.fmt.pix.sizeimage) {
+            frame_size = vfmt.fmt.pix.sizeimage;
+        }
+
+        dev->imgsize = frame_size;
+
         ret = v4l2_qbuf(dev->vdev);
         if (ret < 0)
             goto err;
@@ -1816,7 +1870,14 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         dev->vdev->is_streaming = 1;
     }
 
-    /* Common setup. */
+    /* Set the UVC format with proper buffer size before allocating buffers */
+    ret = uvc_video_set_format(dev);
+    if (ret < 0)
+        goto err;
+
+    ret = uvc_video_reqbufs(dev, dev->nbufs);
+    if (ret < 0)
+        goto err;
 
     /* Queue buffers to UVC domain and start streaming. */
     ret = uvc_video_qbuf(dev);
@@ -1868,23 +1929,7 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     ctrl->bFormatIndex = iformat + 1;
     ctrl->bFrameIndex = iframe + 1;
     ctrl->dwFrameInterval = frame->intervals[0];
-    switch (format->fcc) {
-    case V4L2_PIX_FMT_YUYV:
-        ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
-        break;
-    case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise use width*height*2 as buffer size.
-         * MJPEG compression varies significantly, but we need sufficient buffer space
-         * for worst-case frames. Using width*height*2 matches YUYV uncompressed size
-         * and provides adequate headroom for highly detailed or noisy frames.
-         */
-        if (dev->imgsize > 0) {
-            ctrl->dwMaxVideoFrameSize = dev->imgsize;
-        } else {
-            ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
-        }
-        break;
-    }
+    ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
 
     /* TODO: the UVC maxpayload transfer size should be filled
      * by the driver.
@@ -2396,23 +2441,7 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
 
     target->bFormatIndex = iformat;
     target->bFrameIndex = iframe;
-    switch (format->fcc) {
-    case V4L2_PIX_FMT_YUYV:
-        target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
-        break;
-    case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise use width*height*2 as buffer size.
-         * MJPEG compression varies significantly, but we need sufficient buffer space
-         * for worst-case frames. Using width*height*2 matches YUYV uncompressed size
-         * and provides adequate headroom for highly detailed or noisy frames.
-         */
-        if (dev->imgsize > 0) {
-            target->dwMaxVideoFrameSize = dev->imgsize;
-        } else {
-            target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
-        }
-        break;
-    }
+    target->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
     target->dwFrameInterval = *interval;
     target->dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
