@@ -1117,7 +1117,6 @@ static void v4l2_close(struct v4l2_device *dev)
  * UVC generic stuff
  */
 
-__attribute__((unused))
 static int uvc_video_set_format(struct uvc_device *dev)
 {
     struct v4l2_format fmt;
@@ -1130,8 +1129,14 @@ static int uvc_video_set_format(struct uvc_device *dev)
     fmt.fmt.pix.height = dev->height;
     fmt.fmt.pix.pixelformat = dev->fcc;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    if (dev->fcc == V4L2_PIX_FMT_MJPEG)
-        fmt.fmt.pix.sizeimage = dev->imgsize * 1.5;
+    
+    /* Set sizeimage to match what we negotiated in COMMIT.
+     * For MJPEG, use width*height*2 to provide adequate buffer space.
+     * For YUYV, it's also width*height*2 (2 bytes per pixel).
+     */
+    if (dev->fcc == V4L2_PIX_FMT_MJPEG || dev->fcc == V4L2_PIX_FMT_YUYV) {
+        fmt.fmt.pix.sizeimage = dev->width * dev->height * 2;
+    }
 
     ret = ioctl(dev->uvc_fd, VIDIOC_S_FMT, &fmt);
     if (ret < 0) {
@@ -1139,7 +1144,9 @@ static int uvc_video_set_format(struct uvc_device *dev)
         return ret;
     }
 
-    printf("UVC: Setting format to: %c%c%c%c %ux%u\n", pixfmtstr(dev->fcc), dev->width, dev->height);
+    if (!quiet_mode)
+        printf("UVC: Setting format to: %c%c%c%c %ux%u, sizeimage=%u\n", 
+               pixfmtstr(dev->fcc), dev->width, dev->height, fmt.fmt.pix.sizeimage);
 
     return 0;
 }
@@ -1689,6 +1696,11 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
 
     /* Clear shutdown flag - we're starting a new stream */
     dev->uvc_shutdown_requested = 0;
+
+    /* Set the UVC format with proper buffer size before allocating buffers */
+    ret = uvc_video_set_format(dev);
+    if (ret < 0)
+        goto err;
 
     ret = uvc_video_reqbufs(dev, dev->nbufs);
     if (ret < 0)
