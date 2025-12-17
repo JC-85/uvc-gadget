@@ -51,6 +51,9 @@
 #undef ENABLE_BUFFER_DEBUG
 #undef ENABLE_USB_REQUEST_DEBUG
 
+/* Global quiet mode flag - when set, suppress non-critical messages */
+static int quiet_mode = 0;
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -470,7 +473,8 @@ static void *tee_writer_thread(void *arg)
     struct v4l2_device *dev = (struct v4l2_device *)arg;
     struct tee_frame frame;
     
-    printf("TEE: Writer thread started\n");
+    if (!quiet_mode)
+        printf("TEE: Writer thread started\n");
     
     while (1) {
         if (tee_ring_buffer_pop(dev->tee_ring, &frame) != 0) {
@@ -526,7 +530,8 @@ static void *tee_writer_thread(void *arg)
         free(frame.data);
     }
     
-    printf("TEE: Writer thread exiting\n");
+    if (!quiet_mode)
+        printf("TEE: Writer thread exiting\n");
     return NULL;
 }
 
@@ -675,7 +680,8 @@ static int v4l2_reqbufs_userptr(struct v4l2_device *dev, int nbufs)
     }
 
     dev->nbufs = req.count;
-    printf("V4L2: %u buffers allocated.\n", req.count);
+    if (!quiet_mode)
+        printf("V4L2: %u buffers allocated.\n", req.count);
 
     return 0;
 }
@@ -951,7 +957,8 @@ static int v4l2_start_capturing(struct v4l2_device *dev)
         return ret;
     }
 
-    printf("V4L2: Starting video stream.\n");
+    if (!quiet_mode)
+        printf("V4L2: Starting video stream.\n");
 
     return 0;
 }
@@ -1129,7 +1136,8 @@ static int uvc_video_stream(struct uvc_device *dev, int enable)
         return ret;
     }
 
-    printf("UVC: Starting video stream.\n");
+    if (!quiet_mode)
+        printf("UVC: Starting video stream.\n");
 
     dev->uvc_shutdown_requested = 0;
 
@@ -1337,9 +1345,10 @@ static int uvc_video_process(struct uvc_device *dev)
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
             dev->uvc_shutdown_requested = 1;
-            printf(
-                "UVC: Possible USB shutdown requested from "
-                "Host, seen during VIDIOC_DQBUF\n");
+            if (!quiet_mode)
+                printf(
+                    "UVC: Possible USB shutdown requested from "
+                    "Host, seen during VIDIOC_DQBUF\n");
             return 0;
         }
 
@@ -1513,7 +1522,8 @@ static int uvc_video_reqbufs_mmap(struct uvc_device *dev, int nbufs)
     }
 
     dev->nbufs = rb.count;
-    printf("UVC: %u buffers allocated.\n", rb.count);
+    if (!quiet_mode)
+        printf("UVC: %u buffers allocated.\n", rb.count);
 
     return 0;
 
@@ -1548,7 +1558,8 @@ static int uvc_video_reqbufs_userptr(struct uvc_device *dev, int nbufs)
         return 0;
 
     dev->nbufs = rb.count;
-    printf("UVC: %u buffers allocated.\n", rb.count);
+    if (!quiet_mode)
+        printf("UVC: %u buffers allocated.\n", rb.count);
 
     if (dev->run_standalone) {
         /* Allocate buffers to hold dummy data pattern. */
@@ -2260,9 +2271,10 @@ static void uvc_events_process(struct uvc_device *dev)
 
     case UVC_EVENT_DISCONNECT:
         dev->uvc_shutdown_requested = 1;
-        printf(
-            "UVC: Possible USB shutdown requested from "
-            "Host, seen via UVC_EVENT_DISCONNECT\n");
+        if (!quiet_mode)
+            printf(
+                "UVC: Possible USB shutdown requested from "
+                "Host, seen via UVC_EVENT_DISCONNECT\n");
         return;
 
     case UVC_EVENT_SETUP:
@@ -2401,6 +2413,7 @@ static void usage(const char *argv0)
     fprintf(stderr, " -t		Streaming burst (b/w 0 and 15)\n");
     fprintf(stderr, " -u device	UVC Video Output device\n");
     fprintf(stderr, " -v device	V4L2 Video Capture device\n");
+    fprintf(stderr, " -q		Quiet mode (suppress non-critical messages)\n");
 }
 
 int main(int argc, char *argv[])
@@ -2430,7 +2443,7 @@ int main(int argc, char *argv[])
 
     signal(SIGPIPE, SIG_IGN);
 
-    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:T:")) != -1) {
+    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:T:q")) != -1) {
         switch (opt) {
         case 'b':
             bulk_mode = 1;
@@ -2534,6 +2547,10 @@ int main(int argc, char *argv[])
             printf("UVC: Tee path specified as %s\n", optarg);
             tee_path = optarg;
             break;
+        
+        case 'q':
+            quiet_mode = 1;
+            break;
 
         default:
             printf("Invalid option '-%c'\n", opt);
@@ -2586,7 +2603,8 @@ int main(int argc, char *argv[])
                 return 1;
             }
             vdev->tee_thread_running = 1;
-            printf("TEE: Ring buffer and writer thread initialized\n");
+            if (!quiet_mode)
+                printf("TEE: Ring buffer and writer thread initialized\n");
         }
     }
 
@@ -2729,12 +2747,7 @@ int main(int argc, char *argv[])
         }
 
         if (0 == ret) {
-            /* Only exit on timeout if shutdown was requested */
-            if (udev->uvc_shutdown_requested) {
-                printf("select timeout after shutdown request\n");
-                break;
-            }
-            /* Otherwise continue - timeout is normal when idle */
+            /* Timeout is normal when idle or during stream pause - just continue */
             continue;
         }
 
