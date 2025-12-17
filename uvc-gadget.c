@@ -2185,12 +2185,14 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
 
     switch (dev->control) {
     case UVC_VS_PROBE_CONTROL:
-        printf("setting probe control, length = %d\n", data->length);
+        if (!quiet_mode)
+            printf("setting probe control, length = %d\n", data->length);
         target = &dev->probe;
         break;
 
     case UVC_VS_COMMIT_CONTROL:
-        printf("setting commit control, length = %d\n", data->length);
+        if (!quiet_mode)
+            printf("setting commit control, length = %d\n", data->length);
         target = &dev->commit;
         break;
 
@@ -2228,11 +2230,14 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     frame = &format->frames[iframe - 1];
     interval = frame->intervals;
 
-    if (!quiet_mode)
-        printf("Host requested: %ux%u interval=%u (%.2f fps)\n",
-               frame->width, frame->height,
+    if (!quiet_mode) {
+        const char *phase = (dev->control == UVC_VS_PROBE_CONTROL) ? "PROBE" : 
+                           (dev->control == UVC_VS_COMMIT_CONTROL) ? "COMMIT" : "UNKNOWN";
+        printf("%s: Host requested %ux%u interval=%u (%.2f fps)\n",
+               phase, frame->width, frame->height,
                ctrl->dwFrameInterval,
                ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
+    }
 
     /* Find the closest matching interval to what the host requested.
      * The intervals array is sorted in ascending order (fastest to slowest frame rate).
@@ -2282,11 +2287,13 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->fcc = format->fcc;
         dev->width = frame->width;
         dev->height = frame->height;
-        if (!quiet_mode)
-            printf("COMMIT: %ux%u interval=%u (100ns) fps=%.2f\n",
+        if (!quiet_mode) {
+            printf("COMMIT: Selected %ux%u interval=%u (%.2f fps), buffer size=%u bytes\n",
                    frame->width, frame->height,
                    target->dwFrameInterval,
-                   target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0);
+                   target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0,
+                   target->dwMaxVideoFrameSize);
+        }
     }
 
     return 0;
