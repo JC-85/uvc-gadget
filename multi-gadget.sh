@@ -30,7 +30,7 @@ echo "UVC" > "$CONFIGFS_ROOT/configs/c.1/strings/0x409/configuration"
 mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0"
 mkdir -p "$CONFIGFS_ROOT/functions/acm.usb0"
 mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h"
-[ ! -L "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" ] && \
+[ ! -e "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" ] && \
     ln -s "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h" "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h"
 
 # For 720p:
@@ -38,11 +38,10 @@ FRAME_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p"
 mkdir -p "$FRAME_DIR"
 
 # Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps
-cat <<EOF > "$FRAME_DIR/dwFrameInterval"
-333333
+FRAME_INTERVALS="333333
 666666
-10000000
-EOF
+10000000"
+echo "$FRAME_INTERVALS" > "$FRAME_DIR/dwFrameInterval"
 echo "1280" > "$FRAME_DIR/wWidth"
 echo "720" > "$FRAME_DIR/wHeight"
 echo "10000000" > "$FRAME_DIR/dwMinBitRate"
@@ -51,13 +50,10 @@ echo "7372800" > "$FRAME_DIR/dwMaxVideoFrameBufferSize"
 
 # Verify frame intervals were set correctly
 ACTUAL_INTERVALS=$(cat "$FRAME_DIR/dwFrameInterval")
-EXPECTED_INTERVALS="333333
-666666
-10000000"
-if [ "$ACTUAL_INTERVALS" != "$EXPECTED_INTERVALS" ]; then
+if [ "$ACTUAL_INTERVALS" != "$FRAME_INTERVALS" ]; then
     echo "ERROR: Frame intervals not set correctly for 720p"
     echo "Expected:"
-    echo "$EXPECTED_INTERVALS"
+    echo "$FRAME_INTERVALS"
     echo "Actual:"
     echo "$ACTUAL_INTERVALS"
     exit 1
@@ -92,23 +88,23 @@ STREAMING_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming"
 mkdir -p "$STREAMING_DIR/header/h"
 mkdir -p "$STREAMING_DIR/class/fs"
 mkdir -p "$STREAMING_DIR/class/hs"
-[ ! -L "$STREAMING_DIR/header/h/m" ] && \
+[ ! -e "$STREAMING_DIR/header/h/m" ] && \
     ln -s "../../mjpeg/m" "$STREAMING_DIR/header/h/m"
-[ ! -L "$STREAMING_DIR/class/fs/h" ] && \
+[ ! -e "$STREAMING_DIR/class/fs/h" ] && \
     ln -s "../../header/h" "$STREAMING_DIR/class/fs/h"
-[ ! -L "$STREAMING_DIR/class/hs/h" ] && \
+[ ! -e "$STREAMING_DIR/class/hs/h" ] && \
     ln -s "../../header/h" "$STREAMING_DIR/class/hs/h"
 
 # Link functions to config
-[ ! -L "$CONFIGFS_ROOT/configs/c.1/uvc.usb0" ] && \
+[ ! -e "$CONFIGFS_ROOT/configs/c.1/uvc.usb0" ] && \
     ln -s "$CONFIGFS_ROOT/functions/uvc.usb0" "$CONFIGFS_ROOT/configs/c.1/uvc.usb0"
-[ ! -L "$CONFIGFS_ROOT/configs/c.1/acm.usb0" ] && \
+[ ! -e "$CONFIGFS_ROOT/configs/c.1/acm.usb0" ] && \
     ln -s "$CONFIGFS_ROOT/functions/acm.usb0" "$CONFIGFS_ROOT/configs/c.1/acm.usb0"
 
 udevadm settle -t 5 || :
 
 # Enable the gadget only if not already enabled
-if [ ! -s "$CONFIGFS_ROOT/UDC" ] || [ "$(cat "$CONFIGFS_ROOT/UDC")" = "" ]; then
+if [ ! -s "$CONFIGFS_ROOT/UDC" ]; then
     ls /sys/class/udc > "$CONFIGFS_ROOT/UDC"
     echo "✓ USB gadget enabled"
 else
