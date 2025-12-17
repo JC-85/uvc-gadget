@@ -1329,42 +1329,17 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, re-queue it back to UVC.
-         * This can happen during normal operation (e.g., host pausing,
-         * stream startup). We must re-queue to UVC to avoid losing buffers.
+         * underlying UVC driver gadget, do not queue the same to V4l2
+         * and wait for a STREAMOFF event on UVC side corresponding to
+         * set_alt(0). So, now all buffers pending at UVC end will be
+         * dequeued one-by-one and we will enter a state where we once
+         * again wait for a set_alt(1) command from the USB host side.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            struct v4l2_buffer reqbuf;
-            printf("UVC: Buffer returned with error flag, re-queuing to UVC\n");
-            
-            /* Re-queue the buffer back to UVC */
-            CLEAR(reqbuf);
-            reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-            reqbuf.index = ubuf.index;
-            
-            switch (dev->io) {
-            case IO_METHOD_MMAP:
-                reqbuf.memory = V4L2_MEMORY_MMAP;
-                break;
-            
-            case IO_METHOD_USERPTR:
-            default:
-                /* Default to USERPTR to match pattern used elsewhere in this file.
-                 * Only MMAP and USERPTR are defined IO methods for this application.
-                 */
-                reqbuf.memory = V4L2_MEMORY_USERPTR;
-                reqbuf.m.userptr = ubuf.m.userptr;
-                reqbuf.length = ubuf.length;
-                break;
-            }
-            
-            ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
-            if (ret < 0) {
-                printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
-                return ret;
-            }
-            
-            dev->qbuf_count++;
+            dev->uvc_shutdown_requested = 1;
+            printf(
+                "UVC: Possible USB shutdown requested from "
+                "Host, seen during VIDIOC_DQBUF\n");
             return 0;
         }
 
