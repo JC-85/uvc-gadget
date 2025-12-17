@@ -92,6 +92,14 @@
 #define PU_BRIGHTNESS_STEP_SIZE 1
 #define PU_BRIGHTNESS_DEFAULT_VAL 55
 
+/*
+ * MJPEG compression ratio estimate for frame size calculations.
+ * MJPEG compression varies significantly based on image content,
+ * but 0.5 (divide by 2) is a conservative upper bound estimate
+ * that provides sufficient buffer space for most content.
+ */
+#define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
+
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -146,13 +154,13 @@ static const struct uvc_frame_info uvc_frames_yuyv[] = {
     {
         WIDTH1,
         HEIGHT1,
-        //{666666, 10000000, 50000000, 0},
-        {50000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {50000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
@@ -168,13 +176,13 @@ static const struct uvc_frame_info uvc_frames_mjpeg[] = {
     {
         WIDTH1,
         HEIGHT1,
-        //{666666, 10000000, 50000000, 0},
-        {50000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {50000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
@@ -1321,12 +1329,42 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, do not queue the same to V4l2.
-         * This can happen during normal operation (e.g., host pausing),
-         * not just during shutdown. Continue processing other buffers.
+         * underlying UVC driver gadget, re-queue it back to UVC.
+         * This can happen during normal operation (e.g., host pausing,
+         * stream startup). We must re-queue to UVC to avoid losing buffers.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            printf("UVC: Buffer returned with error flag, skipping re-queue\n");
+            struct v4l2_buffer reqbuf;
+            printf("UVC: Buffer returned with error flag, re-queuing to UVC\n");
+            
+            /* Re-queue the buffer back to UVC */
+            CLEAR(reqbuf);
+            reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+            reqbuf.index = ubuf.index;
+            
+            switch (dev->io) {
+            case IO_METHOD_MMAP:
+                reqbuf.memory = V4L2_MEMORY_MMAP;
+                break;
+            
+            case IO_METHOD_USERPTR:
+            default:
+                /* Default to USERPTR to match pattern used elsewhere in this file.
+                 * Only MMAP and USERPTR are defined IO methods for this application.
+                 */
+                reqbuf.memory = V4L2_MEMORY_USERPTR;
+                reqbuf.m.userptr = ubuf.m.userptr;
+                reqbuf.length = ubuf.length;
+                break;
+            }
+            
+            ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
+            if (ret < 0) {
+                printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
+                return ret;
+            }
+            
+            dev->qbuf_count++;
             return 0;
         }
 
@@ -1701,7 +1739,16 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        ctrl->dwMaxVideoFrameSize = dev->imgsize;
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
+         */
+        if (dev->imgsize > 0) {
+            ctrl->dwMaxVideoFrameSize = dev->imgsize;
+        } else {
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+        }
         break;
     }
 
@@ -2189,9 +2236,17 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        if (dev->imgsize == 0)
-            printf("WARNING: MJPEG requested and no image loaded.\n");
-        target->dwMaxVideoFrameSize = dev->imgsize;
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
+         */
+        if (dev->imgsize > 0) {
+            target->dwMaxVideoFrameSize = dev->imgsize;
+        } else {
+            printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
+            target->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+        }
         break;
     }
     target->dwFrameInterval = *interval;
