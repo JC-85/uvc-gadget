@@ -2487,23 +2487,21 @@ static void uvc_events_process(struct uvc_device *dev)
 static void uvc_events_init(struct uvc_device *dev)
 {
     struct v4l2_event_subscription sub;
-    unsigned int payload_size;
-
-    switch (dev->fcc) {
-    case V4L2_PIX_FMT_YUYV:
-        payload_size = dev->width * dev->height * 2;
-        break;
-    case V4L2_PIX_FMT_MJPEG:
-        payload_size = dev->imgsize;
-        break;
-    }
 
     uvc_fill_streaming_control(dev, &dev->probe, 0, 0);
     uvc_fill_streaming_control(dev, &dev->commit, 0, 0);
 
     if (dev->bulk) {
-        /* FIXME Crude hack, must be negotiated with the driver. */
-        dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = payload_size;
+        /*
+         * For bulk endpoints, dwMaxPayloadTransferSize must match the USB
+         * packet budget (not the frame size). Use the endpoint's max packet
+         * size scaled by mult/burst so the host doesn't stall expecting
+         * impossible payloads.
+         */
+        unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
+        if (!max_payload)
+            max_payload = dev->maxpkt;
+        dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = max_payload;
     }
 
     memset(&sub, 0, sizeof sub);
