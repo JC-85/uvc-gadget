@@ -312,14 +312,6 @@ static unsigned int uvc_max_payload(const struct uvc_device *dev)
     return max_payload;
 }
 
-static unsigned int uvc_max_payload(const struct uvc_device *dev)
-{
-    unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
-    if (max_payload == 0)
-        max_payload = dev->maxpkt;
-    return max_payload;
-}
-
 
 /* ---------------------------------------------------------------------------
  * TEE ring buffer operations
