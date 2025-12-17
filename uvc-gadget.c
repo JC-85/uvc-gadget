@@ -2547,7 +2547,7 @@ int main(int argc, char *argv[])
             printf("UVC: Tee path specified as %s\n", optarg);
             tee_path = optarg;
             break;
-        
+
         case 'q':
             quiet_mode = 1;
             break;
