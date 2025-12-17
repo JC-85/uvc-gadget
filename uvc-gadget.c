@@ -2228,7 +2228,11 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     frame = &format->frames[iframe - 1];
     interval = frame->intervals;
 
-    while (interval[0] < ctrl->dwFrameInterval && interval[1])
+    /* Find the closest matching interval. Prefer the smallest interval (highest frame rate)
+     * when the requested interval is between two supported values, as per UVC spec guidelines.
+     * The intervals array is sorted in ascending order (fastest to slowest frame rate).
+     */
+    while (interval[1] && (interval[1] <= ctrl->dwFrameInterval))
         ++interval;
 
     target->bFormatIndex = iformat;
@@ -2257,6 +2261,10 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->fcc = format->fcc;
         dev->width = frame->width;
         dev->height = frame->height;
+        printf("COMMIT: %ux%u interval=%u (100ns) fps=%.2f\n",
+               frame->width, frame->height,
+               target->dwFrameInterval,
+               target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0);
     }
 
     return 0;
