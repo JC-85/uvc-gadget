@@ -300,6 +300,14 @@ struct uvc_device {
 /* forward declarations */
 static int uvc_video_stream(struct uvc_device *dev, int enable);
 
+static unsigned int uvc_max_payload(const struct uvc_device *dev)
+{
+    unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
+    if (max_payload == 0)
+        max_payload = dev->maxpkt;
+    return max_payload;
+}
+
 
 /* ---------------------------------------------------------------------------
  * TEE ring buffer operations
@@ -2377,6 +2385,7 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         break;
     }
     target->dwFrameInterval = *interval;
+    target->dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
     if (dev->control == UVC_VS_COMMIT_CONTROL) {
         dev->fcc = format->fcc;
@@ -2491,18 +2500,12 @@ static void uvc_events_init(struct uvc_device *dev)
     uvc_fill_streaming_control(dev, &dev->probe, 0, 0);
     uvc_fill_streaming_control(dev, &dev->commit, 0, 0);
 
-    if (dev->bulk) {
-        /*
-         * For bulk endpoints, dwMaxPayloadTransferSize must match the USB
-         * packet budget (not the frame size). Use the endpoint's max packet
-         * size scaled by mult/burst so the host doesn't stall expecting
-         * impossible payloads.
-         */
-        unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
-        if (!max_payload)
-            max_payload = dev->maxpkt;
-        dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = max_payload;
-    }
+    /*
+     * dwMaxPayloadTransferSize should reflect the USB packet budget for both
+     * bulk and isochronous endpoints so the host doesn't request payloads that
+     * exceed what the endpoint can deliver per (micro)frame.
+     */
+    dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
     memset(&sub, 0, sizeof sub);
     sub.type = UVC_EVENT_SETUP;
