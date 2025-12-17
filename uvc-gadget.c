@@ -815,6 +815,12 @@ static int v4l2_process_data(struct v4l2_device *dev)
     struct v4l2_buffer vbuf;
     struct v4l2_buffer ubuf;
 
+    static int call_count = 0;
+    if (++call_count <= 5 || call_count % 100 == 0) {
+        DEBUG_PRINT("V4L2: v4l2_process_data called #%d, is_streaming=%d, dqbuf=%llu, qbuf=%llu\n",
+                   call_count, dev->is_streaming, dev->dqbuf_count, dev->udev ? dev->udev->qbuf_count : 0);
+    }
+
     /* Return immediately if V4l2 streaming has not yet started. */
     if (!dev->is_streaming) {
         DEBUG_PRINT("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
@@ -842,6 +848,8 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     ret = ioctl(dev->v4l2_fd, VIDIOC_DQBUF, &vbuf);
     if (ret < 0) {
+        DEBUG_PRINT("V4L2: VIDIOC_DQBUF failed: %s (%d), dqbuf_count=%llu\n", 
+                   strerror(errno), errno, dev->dqbuf_count);
         return ret;
     }
 
@@ -875,7 +883,10 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
     switch (dev->udev->io) {
     case IO_METHOD_MMAP:
         ubuf.memory = V4L2_MEMORY_MMAP;
-        ubuf.length = vbuf.length;
+        /* Use UVC buffer's actual allocated length, not V4L2's length.
+         * V4L2 camera driver may allocate different sized buffers than UVC expects.
+         * We must use the UVC buffer length that was allocated via VIDIOC_REQBUFS. */
+        ubuf.length = dev->udev->mem[vbuf.index].length;
         ubuf.index = vbuf.index;
         ubuf.bytesused = vbuf.bytesused;
         break;
@@ -905,6 +916,8 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
             ubuf.bytesused = capacity;
         }
     }
+    DEBUG_PRINT("UVC: Queueing buffer index=%d, length=%u, bytesused=%u (V4L2 length was %u)\n",
+               ubuf.index, ubuf.length, ubuf.bytesused, vbuf.length);
 
     ret = ioctl(dev->udev->uvc_fd, VIDIOC_QBUF, &ubuf);
     if (ret < 0) {
@@ -916,6 +929,8 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
                 "Host, seen during VIDIOC_QBUF\n");
             return 0;
         } else {
+            DEBUG_PRINT("UVC: VIDIOC_QBUF failed: %s (%d), index=%d, length=%u, bytesused=%u\n",
+                       strerror(errno), errno, ubuf.index, ubuf.length, ubuf.bytesused);
             return ret;
         }
     }
@@ -972,6 +987,7 @@ static int v4l2_get_format(struct v4l2_device *dev)
 static int v4l2_set_format(struct v4l2_device *dev, struct v4l2_format *fmt)
 {
     int ret;
+    unsigned int requested_sizeimage = fmt->fmt.pix.sizeimage;
 
     ret = ioctl(dev->v4l2_fd, VIDIOC_S_FMT, fmt);
     if (ret < 0) {
@@ -981,6 +997,14 @@ static int v4l2_set_format(struct v4l2_device *dev, struct v4l2_format *fmt)
 
     printf("V4L2: Setting format to: %c%c%c%c %ux%u\n", pixfmtstr(fmt->fmt.pix.pixelformat), fmt->fmt.pix.width,
            fmt->fmt.pix.height);
+    
+    /* V4L2 driver may modify sizeimage - check and warn if different from requested */
+    if (fmt->fmt.pix.sizeimage != requested_sizeimage) {
+        DEBUG_PRINT("V4L2: WARNING - Driver changed sizeimage from %u to %u\n",
+                   requested_sizeimage, fmt->fmt.pix.sizeimage);
+    }
+    DEBUG_PRINT("V4L2: Format details: sizeimage=%u, bytesperline=%u\n",
+               fmt->fmt.pix.sizeimage, fmt->fmt.pix.bytesperline);
 
     return 0;
 }
