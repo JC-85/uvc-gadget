@@ -2267,10 +2267,11 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->fcc = format->fcc;
         dev->width = frame->width;
         dev->height = frame->height;
-        printf("COMMIT: %ux%u interval=%u (100ns) fps=%.2f\n",
-               frame->width, frame->height,
-               target->dwFrameInterval,
-               target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0);
+        if (!quiet_mode)
+            printf("COMMIT: %ux%u interval=%u (100ns) fps=%.2f\n",
+                   frame->width, frame->height,
+                   target->dwFrameInterval,
+                   target->dwFrameInterval ? 1e7 / target->dwFrameInterval : 0.0);
     }
 
     return 0;
