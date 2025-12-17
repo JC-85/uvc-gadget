@@ -51,6 +51,21 @@
 #undef ENABLE_BUFFER_DEBUG
 #undef ENABLE_USB_REQUEST_DEBUG
 
+/* Debug macros that can be compiled out with -DDISABLE_DEBUG */
+#ifndef DISABLE_DEBUG
+    #define DEBUG_PRINT(fmt, ...) printf(fmt, ##__VA_ARGS__)
+    #define DEBUG_PRINT_THROTTLED(counter, interval, fmt, ...) \
+        do { \
+            static unsigned long __debug_counter = 0; \
+            if ((__debug_counter++ % (interval)) == 0) { \
+                printf(fmt, ##__VA_ARGS__); \
+            } \
+        } while(0)
+#else
+    #define DEBUG_PRINT(fmt, ...) do {} while(0)
+    #define DEBUG_PRINT_THROTTLED(counter, interval, fmt, ...) do {} while(0)
+#endif
+
 /* Global quiet mode flag - when set, suppress non-critical messages */
 static int quiet_mode = 0;
 
@@ -793,6 +808,11 @@ static int v4l2_process_data(struct v4l2_device *dev)
     printf("Dequeueing buffer at V4L2 side = %d\n", vbuf.index);
 #endif
 
+    /* Throttled debug output to show data capture from V4L2 device */
+    DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
+        "V4L2: Captured frame - buffer index=%d, %u bytes [%llu total]\n",
+        vbuf.index, vbuf.bytesused, dev->dqbuf_count);
+
      // Copy frame to tee if needed
     void *frame_ptr = NULL;
 
@@ -846,6 +866,11 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 #ifdef ENABLE_BUFFER_DEBUG
     printf("Queueing buffer at UVC side = %d\n", ubuf.index);
 #endif
+
+    /* Throttled debug output to show active data transfer to UVC device */
+    DEBUG_PRINT_THROTTLED(qbuf_throttle, 30, 
+        "UVC: Streaming active - queued buffer #%d (index=%d, %u bytes) [%llu total]\n",
+        (int)(dev->udev->qbuf_count % 1000), ubuf.index, ubuf.bytesused, dev->udev->qbuf_count);
 
     if (!dev->udev->first_buffer_queued && !dev->udev->run_standalone) {
         uvc_video_stream(dev->udev, 1);
