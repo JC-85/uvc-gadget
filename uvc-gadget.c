@@ -320,7 +320,7 @@ static unsigned int uvc_max_payload(const struct uvc_device *dev)
 
 static size_t uvc_default_frame_size(unsigned int width, unsigned int height)
 {
-    return (size_t)width * height * 2;
+    return (size_t)width * height;
 }
 
 static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height)
