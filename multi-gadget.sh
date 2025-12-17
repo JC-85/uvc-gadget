@@ -1,53 +1,68 @@
 #!/bin/bash
 # TODO: Document this file. There's... a lot going on in here.
-mkdir /sys/kernel/config/usb_gadget/pi4
 
-echo 0x1d6b > /sys/kernel/config/usb_gadget/pi4/idVendor
-echo 0x0104 > /sys/kernel/config/usb_gadget/pi4/idProduct
-echo 0x0100 > /sys/kernel/config/usb_gadget/pi4/bcdDevice
-echo 0x0200 > /sys/kernel/config/usb_gadget/pi4/bcdUSB
+set -e  # Exit on error
 
-echo 0xEF > /sys/kernel/config/usb_gadget/pi4/bDeviceClass
-echo 0x02 > /sys/kernel/config/usb_gadget/pi4/bDeviceSubClass
-echo 0x01 > /sys/kernel/config/usb_gadget/pi4/bDeviceProtocol
+CONFIGFS_ROOT="/sys/kernel/config/usb_gadget/pi4"
 
-mkdir /sys/kernel/config/usb_gadget/pi4/strings/0x409
-echo 100000000d2386db > /sys/kernel/config/usb_gadget/pi4/strings/0x409/serialnumber
-echo "Samsung" > /sys/kernel/config/usb_gadget/pi4/strings/0x409/manufacturer
-echo "Pi Webcam" > /sys/kernel/config/usb_gadget/pi4/strings/0x409/product
-mkdir /sys/kernel/config/usb_gadget/pi4/configs/c.1
-mkdir /sys/kernel/config/usb_gadget/pi4/configs/c.1/strings/0x409
-echo 500 > /sys/kernel/config/usb_gadget/pi4/configs/c.1/MaxPower
-echo "UVC" > /sys/kernel/config/usb_gadget/pi4/configs/c.1/strings/0x409/configuration
+# Make script idempotent - check if gadget already exists
+if [ ! -d "$CONFIGFS_ROOT" ]; then
+    mkdir "$CONFIGFS_ROOT"
+fi
 
-mkdir /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0
-mkdir /sys/kernel/config/usb_gadget/pi4/functions/acm.usb0
-mkdir -p /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/control/header/h
-ln -s /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/control/header/h /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/control/class/fs
+echo 0x1d6b > "$CONFIGFS_ROOT/idVendor"
+echo 0x0104 > "$CONFIGFS_ROOT/idProduct"
+echo 0x0100 > "$CONFIGFS_ROOT/bcdDevice"
+echo 0x0200 > "$CONFIGFS_ROOT/bcdUSB"
+
+echo 0xEF > "$CONFIGFS_ROOT/bDeviceClass"
+echo 0x02 > "$CONFIGFS_ROOT/bDeviceSubClass"
+echo 0x01 > "$CONFIGFS_ROOT/bDeviceProtocol"
+
+mkdir -p "$CONFIGFS_ROOT/strings/0x409"
+echo 100000000d2386db > "$CONFIGFS_ROOT/strings/0x409/serialnumber"
+echo "Samsung" > "$CONFIGFS_ROOT/strings/0x409/manufacturer"
+echo "Pi Webcam" > "$CONFIGFS_ROOT/strings/0x409/product"
+mkdir -p "$CONFIGFS_ROOT/configs/c.1/strings/0x409"
+echo 500 > "$CONFIGFS_ROOT/configs/c.1/MaxPower"
+echo "UVC" > "$CONFIGFS_ROOT/configs/c.1/strings/0x409/configuration"
+
+mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0"
+mkdir -p "$CONFIGFS_ROOT/functions/acm.usb0"
+mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h"
+[ ! -L "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" ] && \
+    ln -s "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h" "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h"
 
 # For 720p:
-mkdir -p /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p
+FRAME_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p"
+mkdir -p "$FRAME_DIR"
+
 # Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/dwFrameInterval
+cat <<EOF > "$FRAME_DIR/dwFrameInterval"
 333333
 666666
 10000000
 EOF
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/wWidth
-1280
-EOF
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/wHeight
-720
-EOF
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/dwMinBitRate
-10000000
-EOF
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/dwMaxBitRate
-100000000
-EOF
-cat <<EOF > /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/720p/dwMaxVideoFrameBufferSize
-7372800
-EOF
+echo "1280" > "$FRAME_DIR/wWidth"
+echo "720" > "$FRAME_DIR/wHeight"
+echo "10000000" > "$FRAME_DIR/dwMinBitRate"
+echo "100000000" > "$FRAME_DIR/dwMaxBitRate"
+echo "7372800" > "$FRAME_DIR/dwMaxVideoFrameBufferSize"
+
+# Verify frame intervals were set correctly
+ACTUAL_INTERVALS=$(cat "$FRAME_DIR/dwFrameInterval")
+EXPECTED_INTERVALS="333333
+666666
+10000000"
+if [ "$ACTUAL_INTERVALS" != "$EXPECTED_INTERVALS" ]; then
+    echo "ERROR: Frame intervals not set correctly for 720p"
+    echo "Expected:"
+    echo "$EXPECTED_INTERVALS"
+    echo "Actual:"
+    echo "$ACTUAL_INTERVALS"
+    exit 1
+fi
+echo "✓ 720p frame intervals verified: 30fps, 15fps, 1fps"
 
 # For 1080p:
 # mkdir -p /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/1080p
@@ -73,16 +88,27 @@ EOF
 # 7372800
 # EOF
 
-mkdir /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/header/h
-cd /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/header/h
-ln -s ../../mjpeg/m
-cd ../../class/fs
-ln -s ../../header/h
-cd ../../class/hs
-ln -s ../../header/h
-cd ../../../../..
+STREAMING_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming"
+mkdir -p "$STREAMING_DIR/header/h"
+[ ! -L "$STREAMING_DIR/header/h/m" ] && \
+    ln -s "../../mjpeg/m" "$STREAMING_DIR/header/h/m"
+[ ! -L "$STREAMING_DIR/class/fs/h" ] && \
+    ln -s "../../header/h" "$STREAMING_DIR/class/fs/h"
+[ ! -L "$STREAMING_DIR/class/hs/h" ] && \
+    ln -s "../../header/h" "$STREAMING_DIR/class/hs/h"
 
-ln -s /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0 /sys/kernel/config/usb_gadget/pi4/configs/c.1/uvc.usb0
-ln -s /sys/kernel/config/usb_gadget/pi4/functions/acm.usb0 /sys/kernel/config/usb_gadget/pi4/configs/c.1/acm.usb0
+# Link functions to config
+[ ! -L "$CONFIGFS_ROOT/configs/c.1/uvc.usb0" ] && \
+    ln -s "$CONFIGFS_ROOT/functions/uvc.usb0" "$CONFIGFS_ROOT/configs/c.1/uvc.usb0"
+[ ! -L "$CONFIGFS_ROOT/configs/c.1/acm.usb0" ] && \
+    ln -s "$CONFIGFS_ROOT/functions/acm.usb0" "$CONFIGFS_ROOT/configs/c.1/acm.usb0"
+
 udevadm settle -t 5 || :
-ls /sys/class/udc > /sys/kernel/config/usb_gadget/pi4/UDC
+
+# Enable the gadget only if not already enabled
+if [ ! -s "$CONFIGFS_ROOT/UDC" ] || [ "$(cat "$CONFIGFS_ROOT/UDC")" = "" ]; then
+    ls /sys/class/udc > "$CONFIGFS_ROOT/UDC"
+    echo "✓ USB gadget enabled"
+else
+    echo "✓ USB gadget already enabled: $(cat "$CONFIGFS_ROOT/UDC")"
+fi
