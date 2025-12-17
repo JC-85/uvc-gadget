@@ -790,6 +790,12 @@ static int v4l2_process_data(struct v4l2_device *dev)
     struct v4l2_buffer vbuf;
     struct v4l2_buffer ubuf;
 
+    static int call_count = 0;
+    if (++call_count <= 5 || call_count % 100 == 0) {
+        DEBUG_PRINT("V4L2: v4l2_process_data called #%d, is_streaming=%d, dqbuf=%llu, qbuf=%llu\n",
+                   call_count, dev->is_streaming, dev->dqbuf_count, dev->udev ? dev->udev->qbuf_count : 0);
+    }
+
     /* Return immediately if V4l2 streaming has not yet started. */
     if (!dev->is_streaming) {
         DEBUG_PRINT("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
@@ -817,6 +823,8 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     ret = ioctl(dev->v4l2_fd, VIDIOC_DQBUF, &vbuf);
     if (ret < 0) {
+        DEBUG_PRINT("V4L2: VIDIOC_DQBUF failed: %s (%d), dqbuf_count=%llu\n", 
+                   strerror(errno), errno, dev->dqbuf_count);
         return ret;
     }
 
@@ -875,6 +883,8 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
                 "Host, seen during VIDIOC_QBUF\n");
             return 0;
         } else {
+            DEBUG_PRINT("UVC: VIDIOC_QBUF failed: %s (%d), index=%d, bytesused=%u\n",
+                       strerror(errno), errno, ubuf.index, ubuf.bytesused);
             return ret;
         }
     }
