@@ -103,6 +103,12 @@ static int quiet_mode = 0;
  */
 #define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
 
+/*
+ * Maximum consecutive errors allowed per buffer before considering it
+ * a real failure. USB startup negotiation can cause transient errors.
+ */
+#define MAX_BUFFER_ERROR_RETRIES 5
+
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -118,6 +124,7 @@ struct buffer {
     struct v4l2_buffer buf;
     void *start;
     size_t length;
+    unsigned int error_count;  /* Track consecutive errors for this buffer */
 };
 
 /* Ring buffer entry for TEE frames */
@@ -1337,19 +1344,84 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, do not queue the same to V4l2
-         * and wait for a STREAMOFF event on UVC side corresponding to
-         * set_alt(0). So, now all buffers pending at UVC end will be
-         * dequeued one-by-one and we will enter a state where we once
-         * again wait for a set_alt(1) command from the USB host side.
+         * underlying UVC driver gadget, this can happen during normal
+         * USB negotiation (transient errors) or actual disconnection.
+         * We re-queue the buffer back to UVC a few times to handle
+         * transient errors. Only after repeated failures do we consider
+         * it a real shutdown request.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            dev->uvc_shutdown_requested = 1;
-            if (!quiet_mode)
-                printf(
-                    "UVC: Possible USB shutdown requested from "
-                    "Host, seen during VIDIOC_DQBUF\n");
-            return 0;
+            /* Track errors for this buffer */
+            if (dev->io == IO_METHOD_USERPTR)
+                for (i = 0; i < dev->nbufs; ++i)
+                    if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
+                        ubuf.length == dev->vdev->mem[i].length)
+                        break;
+            
+            unsigned int buf_idx = (dev->io == IO_METHOD_USERPTR) ? i : ubuf.index;
+            
+            if (buf_idx < dev->nbufs) {
+                dev->vdev->mem[buf_idx].error_count++;
+                
+                if (dev->vdev->mem[buf_idx].error_count <= MAX_BUFFER_ERROR_RETRIES) {
+                    /* Transient error - re-queue buffer back to UVC to retry */
+                    struct v4l2_buffer reqbuf;
+                    if (!quiet_mode)
+                        printf("UVC: Buffer %u returned with error (retry %u/%u), re-queuing to UVC\n",
+                               buf_idx, dev->vdev->mem[buf_idx].error_count, MAX_BUFFER_ERROR_RETRIES);
+                    
+                    CLEAR(reqbuf);
+                    reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+                    reqbuf.index = ubuf.index;
+                    
+                    switch (dev->io) {
+                    case IO_METHOD_MMAP:
+                        reqbuf.memory = V4L2_MEMORY_MMAP;
+                        break;
+                    case IO_METHOD_USERPTR:
+                    default:
+                        reqbuf.memory = V4L2_MEMORY_USERPTR;
+                        reqbuf.m.userptr = ubuf.m.userptr;
+                        reqbuf.length = ubuf.length;
+                        break;
+                    }
+                    
+                    ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
+                    if (ret < 0) {
+                        printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
+                        /* If re-queue fails, trigger shutdown */
+                        dev->uvc_shutdown_requested = 1;
+                        return ret;
+                    }
+                    
+                    dev->qbuf_count++;
+                    return 0;
+                } else {
+                    /* Too many consecutive errors - real problem, trigger shutdown */
+                    printf("UVC: Buffer %u has failed %u times, triggering shutdown\n",
+                           buf_idx, dev->vdev->mem[buf_idx].error_count);
+                    dev->uvc_shutdown_requested = 1;
+                    return 0;
+                }
+            } else {
+                /* Unknown buffer - trigger shutdown to be safe */
+                if (!quiet_mode)
+                    printf("UVC: Unknown buffer with error flag, triggering shutdown\n");
+                dev->uvc_shutdown_requested = 1;
+                return 0;
+            }
+        } else {
+            /* Successful buffer - clear error count */
+            if (dev->io == IO_METHOD_USERPTR)
+                for (i = 0; i < dev->nbufs; ++i)
+                    if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
+                        ubuf.length == dev->vdev->mem[i].length)
+                        break;
+            
+            unsigned int buf_idx = (dev->io == IO_METHOD_USERPTR) ? i : ubuf.index;
+            if (buf_idx < dev->nbufs) {
+                dev->vdev->mem[buf_idx].error_count = 0;
+            }
         }
 
         /* Queue the buffer to V4L2 domain */
