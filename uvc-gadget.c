@@ -1321,12 +1321,38 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, do not queue the same to V4l2.
-         * This can happen during normal operation (e.g., host pausing),
-         * not just during shutdown. Continue processing other buffers.
+         * underlying UVC driver gadget, re-queue it back to UVC.
+         * This can happen during normal operation (e.g., host pausing,
+         * stream startup). We must re-queue to UVC to avoid losing buffers.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            printf("UVC: Buffer returned with error flag, skipping re-queue\n");
+            struct v4l2_buffer reqbuf;
+            printf("UVC: Buffer returned with error flag, re-queuing to UVC\n");
+            
+            /* Re-queue the buffer back to UVC */
+            CLEAR(reqbuf);
+            reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+            reqbuf.index = ubuf.index;
+            
+            switch (dev->io) {
+            case IO_METHOD_MMAP:
+                reqbuf.memory = V4L2_MEMORY_MMAP;
+                break;
+            case IO_METHOD_USERPTR:
+            default:
+                reqbuf.memory = V4L2_MEMORY_USERPTR;
+                reqbuf.m.userptr = ubuf.m.userptr;
+                reqbuf.length = ubuf.length;
+                break;
+            }
+            
+            ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
+            if (ret < 0) {
+                printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
+                return ret;
+            }
+            
+            dev->qbuf_count++;
             return 0;
         }
 
