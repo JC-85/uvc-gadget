@@ -2311,7 +2311,7 @@ static void uvc_events_process(struct uvc_device *dev)
     case UVC_EVENT_STREAMOFF:
         /* Clear shutdown flag - stream is cleanly stopped, ready for restart */
         dev->uvc_shutdown_requested = 0;
-        
+
         /* Stop V4L2 streaming... */
         if (!dev->run_standalone && dev->vdev->is_streaming) {
             /* UVC - V4L2 integrated path. */
