@@ -2228,6 +2228,12 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     frame = &format->frames[iframe - 1];
     interval = frame->intervals;
 
+    if (!quiet_mode)
+        printf("Host requested: %ux%u interval=%u (%.2f fps)\n",
+               frame->width, frame->height,
+               ctrl->dwFrameInterval,
+               ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
+
     /* Find the closest matching interval. Prefer the smallest interval (highest frame rate)
      * when the requested interval is between two supported values, as per UVC spec guidelines.
      * The intervals array is sorted in ascending order (fastest to slowest frame rate).
