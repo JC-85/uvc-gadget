@@ -871,6 +871,12 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
     DEBUG_PRINT_THROTTLED(qbuf_throttle, 30, 
         "UVC: Streaming active - queued buffer #%d (index=%d, %u bytes) [%llu total]\n",
         (int)(dev->udev->qbuf_count % 1000), ubuf.index, ubuf.bytesused, dev->udev->qbuf_count);
+    
+    /* Show first few buffers to help diagnose startup issues */
+    if (dev->udev->qbuf_count <= 5) {
+        DEBUG_PRINT("UVC: Buffer #%llu: index=%d, bytesused=%u, length=%u\n",
+                   dev->udev->qbuf_count, ubuf.index, ubuf.bytesused, ubuf.length);
+    }
 
     if (!dev->udev->first_buffer_queued && !dev->udev->run_standalone) {
         uvc_video_stream(dev->udev, 1);
@@ -1379,8 +1385,11 @@ static int uvc_video_process(struct uvc_device *dev)
             if (dev->first_buffer_queued) {
                 /* Streaming was active - ERROR means host is stopping */
                 dev->uvc_shutdown_requested = 1;
-                if (!quiet_mode)
+                if (!quiet_mode) {
                     printf("UVC: Buffer returned with ERROR after streaming started - host stopping\n");
+                    printf("UVC: ERROR buffer details: index=%d, bytesused=%u, length=%u, qbuf_count=%llu, dqbuf_count=%llu\n",
+                           ubuf.index, ubuf.bytesused, ubuf.length, dev->qbuf_count, dev->dqbuf_count);
+                }
             } else {
                 /* Startup phase - ERROR is normal negotiation churn, ignore it */
                 if (!quiet_mode)
