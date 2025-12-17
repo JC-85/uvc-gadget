@@ -98,6 +98,24 @@ UVC: Streaming active - queued buffer #60 (index=1, 153600 bytes) [60 total]
 - Check for "Buffer returned with ERROR" messages
 - May indicate buffer size or frame rate mismatch
 
+**ERROR Buffers (Enhanced Diagnostics):**
+
+The first 5 buffers show detailed info:
+```
+UVC: Buffer #1: index=0, bytesused=15129, length=1843200
+```
+
+When ERROR occurs, you'll see:
+```
+UVC: ERROR buffer details: index=0, bytesused=15129, length=1843200, qbuf_count=1, dqbuf_count=1
+```
+
+Key indicators:
+- **bytesused < length**: Normal - actual frame smaller than max buffer (good compression)
+- **bytesused > length**: Problem - frame too large for buffer (shouldn't happen with our fix)
+- **qbuf_count = dqbuf_count**: All buffers returned with ERROR (streaming failed)
+- **ERROR on buffer #1**: Immediate failure, check COMMIT buffer size and USB mode (bulk vs iso)
+
 ## Throttling Interval
 
 The default throttle interval is 30 frames. This means:
