@@ -574,6 +574,10 @@ static int v4l2_uninit_device(struct v4l2_device *dev)
 
     switch (dev->io) {
     case IO_METHOD_MMAP:
+        /* Nothing to do if buffers were already released. */
+        if (!dev->mem || dev->nbufs == 0)
+            return 0;
+
         for (i = 0; i < dev->nbufs; ++i) {
             ret = munmap(dev->mem[i].start, dev->mem[i].length);
             if (ret < 0) {
@@ -1730,6 +1734,14 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         vfmt.fmt.pix.pixelformat = dev->fcc;
         vfmt.fmt.pix.field = V4L2_FIELD_ANY;
         vfmt.fmt.pix.sizeimage = frame_size;
+
+        /* Stop any active capture before reconfiguring buffers. */
+        if (dev->vdev->is_streaming) {
+            ret = v4l2_stop_capturing(dev->vdev);
+            if (ret < 0)
+                goto err;
+            dev->vdev->is_streaming = 0;
+        }
 
         /* Reinitialize buffers if the format may have changed between streams. */
         if (dev->vdev->io == IO_METHOD_MMAP && dev->vdev->mem) {
