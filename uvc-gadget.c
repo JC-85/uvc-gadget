@@ -1820,15 +1820,15 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound. Integer division is intentional here as we
-         * want a conservative (larger) estimate for the max frame size.
+        /* Use dev->imgsize if valid, otherwise use a safe upper bound.
+         * dwMaxVideoFrameSize must be large enough to handle worst-case MJPEG frames.
+         * Using width * height * 2 provides a conservative upper bound that prevents
+         * host-side renegotiation which can cause ERROR buffer flags and kernel crashes.
          */
         if (dev->imgsize > 0) {
             ctrl->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         }
         break;
     }
@@ -2317,16 +2317,15 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound. Integer division is intentional here as we
-         * want a conservative (larger) estimate for the max frame size.
+        /* Use dev->imgsize if valid, otherwise use a safe upper bound.
+         * dwMaxVideoFrameSize must be large enough to handle worst-case MJPEG frames.
+         * Using width * height * 2 provides a conservative upper bound that prevents
+         * host-side renegotiation which can cause ERROR buffer flags and kernel crashes.
          */
         if (dev->imgsize > 0) {
             target->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
-            target->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+            target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         }
         break;
     }
