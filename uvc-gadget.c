@@ -873,6 +873,9 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         break;
     }
 
+    DEBUG_PRINT("UVC: Queueing buffer index=%d, length=%u, bytesused=%u (V4L2 length was %u)\n",
+               ubuf.index, ubuf.length, ubuf.bytesused, vbuf.length);
+
     ret = ioctl(dev->udev->uvc_fd, VIDIOC_QBUF, &ubuf);
     if (ret < 0) {
         /* Check for a USB disconnect/shutdown event. */
@@ -883,8 +886,8 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
                 "Host, seen during VIDIOC_QBUF\n");
             return 0;
         } else {
-            DEBUG_PRINT("UVC: VIDIOC_QBUF failed: %s (%d), index=%d, bytesused=%u\n",
-                       strerror(errno), errno, ubuf.index, ubuf.bytesused);
+            DEBUG_PRINT("UVC: VIDIOC_QBUF failed: %s (%d), index=%d, length=%u, bytesused=%u\n",
+                       strerror(errno), errno, ubuf.index, ubuf.length, ubuf.bytesused);
             return ret;
         }
     }
@@ -941,6 +944,7 @@ static int v4l2_get_format(struct v4l2_device *dev)
 static int v4l2_set_format(struct v4l2_device *dev, struct v4l2_format *fmt)
 {
     int ret;
+    unsigned int requested_sizeimage = fmt->fmt.pix.sizeimage;
 
     ret = ioctl(dev->v4l2_fd, VIDIOC_S_FMT, fmt);
     if (ret < 0) {
@@ -950,6 +954,14 @@ static int v4l2_set_format(struct v4l2_device *dev, struct v4l2_format *fmt)
 
     printf("V4L2: Setting format to: %c%c%c%c %ux%u\n", pixfmtstr(fmt->fmt.pix.pixelformat), fmt->fmt.pix.width,
            fmt->fmt.pix.height);
+    
+    /* V4L2 driver may modify sizeimage - check and warn if different from requested */
+    if (fmt->fmt.pix.sizeimage != requested_sizeimage) {
+        DEBUG_PRINT("V4L2: WARNING - Driver changed sizeimage from %u to %u\n",
+                   requested_sizeimage, fmt->fmt.pix.sizeimage);
+    }
+    DEBUG_PRINT("V4L2: Format details: sizeimage=%u, bytesperline=%u\n",
+               fmt->fmt.pix.sizeimage, fmt->fmt.pix.bytesperline);
 
     return 0;
 }
