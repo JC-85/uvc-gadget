@@ -2795,7 +2795,9 @@ int main(int argc, char *argv[])
     /* Set parameters as passed by user. */
     udev->width = (default_resolution == 0) ? WIDTH1 : WIDTH2;
     udev->height = (default_resolution == 0) ? HEIGHT1 : HEIGHT2;
-    udev->imgsize = (default_format == 0) ? (udev->width * udev->height * 2) : (udev->width * udev->height * 1.5);
+    /* For MJPEG, use width*height*2 to provide adequate buffer space for worst-case frames.
+     * MJPEG compression can vary significantly - detailed/noisy frames need more space. */
+    udev->imgsize = udev->width * udev->height * 2;
     udev->fcc = (default_format == 0) ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
     udev->io = uvc_io_method;
     udev->bulk = bulk_mode;
