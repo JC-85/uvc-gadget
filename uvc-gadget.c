@@ -1349,6 +1349,9 @@ static int uvc_video_process(struct uvc_device *dev)
             
             case IO_METHOD_USERPTR:
             default:
+                /* Default to USERPTR to match pattern used elsewhere in this file.
+                 * Only MMAP and USERPTR are defined IO methods for this application.
+                 */
                 reqbuf.memory = V4L2_MEMORY_USERPTR;
                 reqbuf.m.userptr = ubuf.m.userptr;
                 reqbuf.length = ubuf.length;
@@ -1738,7 +1741,8 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     case V4L2_PIX_FMT_MJPEG:
         /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
          * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound.
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
          */
         if (dev->imgsize > 0) {
             ctrl->dwMaxVideoFrameSize = dev->imgsize;
@@ -2234,7 +2238,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     case V4L2_PIX_FMT_MJPEG:
         /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
          * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound.
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
          */
         if (dev->imgsize > 0) {
             target->dwMaxVideoFrameSize = dev->imgsize;
