@@ -216,6 +216,9 @@ static const struct uvc_format_info uvc_formats[] = {
     {V4L2_PIX_FMT_MJPEG, uvc_frames_mjpeg},
 };
 
+static const struct uvc_format_info *uvc_formats_active = uvc_formats;
+static unsigned int uvc_formats_count = ARRAY_SIZE(uvc_formats);
+
 /* ---------------------------------------------------------------------------
  * V4L2 and UVC device instances
  */
@@ -299,6 +302,15 @@ struct uvc_device {
 
 /* forward declarations */
 static int uvc_video_stream(struct uvc_device *dev, int enable);
+static unsigned int uvc_max_payload(const struct uvc_device *dev);
+
+static unsigned int uvc_max_payload(const struct uvc_device *dev)
+{
+    unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
+    if (max_payload == 0)
+        max_payload = dev->maxpkt;
+    return max_payload;
+}
 
 static unsigned int uvc_max_payload(const struct uvc_device *dev)
 {
@@ -1818,10 +1830,10 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     unsigned int nframes;
 
     if (iformat < 0)
-        iformat = ARRAY_SIZE(uvc_formats) + iformat;
-    if (iformat < 0 || iformat >= (int)ARRAY_SIZE(uvc_formats))
+        iformat = uvc_formats_count + iformat;
+    if (iformat < 0 || iformat >= (int)uvc_formats_count)
         return;
-    format = &uvc_formats[iformat];
+    format = &uvc_formats_active[iformat];
 
     nframes = 0;
     while (format->frames[nframes].width != 0)
@@ -2322,8 +2334,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     }
 
     ctrl = (struct uvc_streaming_control *)&data->data;
-    iformat = clamp((unsigned int)ctrl->bFormatIndex, 1U, (unsigned int)ARRAY_SIZE(uvc_formats));
-    format = &uvc_formats[iformat - 1];
+    iformat = clamp((unsigned int)ctrl->bFormatIndex, 1U, (unsigned int)uvc_formats_count);
+    format = &uvc_formats_active[iformat - 1];
 
     nframes = 0;
     while (format->frames[nframes].width != 0)
@@ -2799,6 +2811,15 @@ int main(int argc, char *argv[])
     udev->mult = mult;
     udev->burst = burst;
     udev->speed = speed;
+
+    /* Advertise only the source format to avoid host renegotiation to unsupported formats. */
+    if (udev->fcc == V4L2_PIX_FMT_MJPEG) {
+        uvc_formats_active = &uvc_formats[1];
+        uvc_formats_count = 1;
+    } else if (udev->fcc == V4L2_PIX_FMT_YUYV) {
+        uvc_formats_active = &uvc_formats[0];
+        uvc_formats_count = 1;
+    }
 
     if (dummy_data_gen_mode || mjpeg_image)
         /* UVC standalone setup. */
