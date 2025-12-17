@@ -1351,14 +1351,21 @@ static int uvc_video_process(struct uvc_device *dev)
          * it a real shutdown request.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            /* Track errors for this buffer */
-            if (dev->io == IO_METHOD_USERPTR)
-                for (i = 0; i < dev->nbufs; ++i)
+            /* Track errors for this buffer - find buffer index */
+            unsigned int buf_idx;
+            
+            if (dev->io == IO_METHOD_USERPTR) {
+                /* Find matching buffer in USERPTR mode */
+                for (i = 0; i < dev->nbufs; ++i) {
                     if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
                         ubuf.length == dev->vdev->mem[i].length)
                         break;
-            
-            unsigned int buf_idx = (dev->io == IO_METHOD_USERPTR) ? i : ubuf.index;
+                }
+                buf_idx = i;
+            } else {
+                /* MMAP mode - use index directly */
+                buf_idx = ubuf.index;
+            }
             
             if (buf_idx < dev->nbufs) {
                 dev->vdev->mem[buf_idx].error_count++;
@@ -1412,13 +1419,21 @@ static int uvc_video_process(struct uvc_device *dev)
             }
         } else {
             /* Successful buffer - clear error count */
-            if (dev->io == IO_METHOD_USERPTR)
-                for (i = 0; i < dev->nbufs; ++i)
+            unsigned int buf_idx;
+            
+            if (dev->io == IO_METHOD_USERPTR) {
+                /* Find matching buffer in USERPTR mode */
+                for (i = 0; i < dev->nbufs; ++i) {
                     if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
                         ubuf.length == dev->vdev->mem[i].length)
                         break;
+                }
+                buf_idx = i;
+            } else {
+                /* MMAP mode - use index directly */
+                buf_idx = ubuf.index;
+            }
             
-            unsigned int buf_idx = (dev->io == IO_METHOD_USERPTR) ? i : ubuf.index;
             if (buf_idx < dev->nbufs) {
                 dev->vdev->mem[buf_idx].error_count = 0;
             }
