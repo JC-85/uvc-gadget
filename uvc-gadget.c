@@ -103,12 +103,6 @@ static int quiet_mode = 0;
  */
 #define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
 
-/*
- * Maximum consecutive errors allowed per buffer before considering it
- * a real failure. USB startup negotiation can cause transient errors.
- */
-#define MAX_BUFFER_ERROR_RETRIES 5
-
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -124,7 +118,6 @@ struct buffer {
     struct v4l2_buffer buf;
     void *start;
     size_t length;
-    unsigned int error_count;  /* Track consecutive errors for this buffer */
 };
 
 /* Ring buffer entry for TEE frames */
@@ -1344,99 +1337,32 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, this can happen during normal
-         * USB negotiation (transient errors) or actual disconnection.
-         * We re-queue the buffer back to UVC a few times to handle
-         * transient errors. Only after repeated failures do we consider
-         * it a real shutdown request.
+         * underlying UVC driver gadget, this typically means the stream
+         * is being torn down (alt setting change, STREAMOFF in flight).
+         *
+         * During startup (before first_buffer_queued), ERROR buffers are
+         * normal "startup churn" from USB negotiation - ignore them and
+         * keep waiting for STREAMON.
+         *
+         * After streaming has started (first_buffer_queued == 1), ERROR
+         * means "host is stopping" - set shutdown flag and stop feeding
+         * buffers until we receive STREAMOFF event and clean restart.
+         *
+         * NEVER re-queue ERROR buffers - that can trigger kernel issues.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            /* Track errors for this buffer - find buffer index */
-            unsigned int buf_idx;
-            
-            if (dev->io == IO_METHOD_USERPTR) {
-                /* Find matching buffer in USERPTR mode */
-                for (i = 0; i < dev->nbufs; ++i) {
-                    if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
-                        ubuf.length == dev->vdev->mem[i].length)
-                        break;
-                }
-                buf_idx = i;
-            } else {
-                /* MMAP mode - use index directly */
-                buf_idx = ubuf.index;
-            }
-            
-            if (buf_idx < dev->nbufs) {
-                dev->vdev->mem[buf_idx].error_count++;
-                
-                if (dev->vdev->mem[buf_idx].error_count <= MAX_BUFFER_ERROR_RETRIES) {
-                    /* Transient error - re-queue buffer back to UVC to retry */
-                    struct v4l2_buffer reqbuf;
-                    if (!quiet_mode)
-                        printf("UVC: Buffer %u returned with error (retry %u/%u), re-queuing to UVC\n",
-                               buf_idx, dev->vdev->mem[buf_idx].error_count, MAX_BUFFER_ERROR_RETRIES);
-                    
-                    CLEAR(reqbuf);
-                    reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-                    reqbuf.index = ubuf.index;
-                    
-                    switch (dev->io) {
-                    case IO_METHOD_MMAP:
-                        reqbuf.memory = V4L2_MEMORY_MMAP;
-                        break;
-                    case IO_METHOD_USERPTR:
-                    default:
-                        reqbuf.memory = V4L2_MEMORY_USERPTR;
-                        reqbuf.m.userptr = ubuf.m.userptr;
-                        reqbuf.length = ubuf.length;
-                        break;
-                    }
-                    
-                    ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
-                    if (ret < 0) {
-                        printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
-                        /* If re-queue fails, trigger shutdown */
-                        dev->uvc_shutdown_requested = 1;
-                        return ret;
-                    }
-                    
-                    dev->qbuf_count++;
-                    return 0;
-                } else {
-                    /* Too many consecutive errors - real problem, trigger shutdown */
-                    printf("UVC: Buffer %u has failed %u times, triggering shutdown\n",
-                           buf_idx, dev->vdev->mem[buf_idx].error_count);
-                    dev->uvc_shutdown_requested = 1;
-                    return 0;
-                }
-            } else {
-                /* Unknown buffer - trigger shutdown to be safe */
-                if (!quiet_mode)
-                    printf("UVC: Unknown buffer with error flag, triggering shutdown\n");
+            if (dev->first_buffer_queued) {
+                /* Streaming was active - ERROR means host is stopping */
                 dev->uvc_shutdown_requested = 1;
-                return 0;
-            }
-        } else {
-            /* Successful buffer - clear error count */
-            unsigned int buf_idx;
-            
-            if (dev->io == IO_METHOD_USERPTR) {
-                /* Find matching buffer in USERPTR mode */
-                for (i = 0; i < dev->nbufs; ++i) {
-                    if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start && 
-                        ubuf.length == dev->vdev->mem[i].length)
-                        break;
-                }
-                buf_idx = i;
+                if (!quiet_mode)
+                    printf("UVC: Buffer returned with ERROR after streaming started - host stopping\n");
             } else {
-                /* MMAP mode - use index directly */
-                buf_idx = ubuf.index;
+                /* Startup phase - ERROR is normal negotiation churn, ignore it */
+                if (!quiet_mode)
+                    printf("UVC: Buffer returned with ERROR during startup - ignoring\n");
             }
-            
-            if (buf_idx < dev->nbufs) {
-                dev->vdev->mem[buf_idx].error_count = 0;
-            }
+            /* Don't re-queue ERROR buffers - just return and wait for next event */
+            return 0;
         }
 
         /* Queue the buffer to V4L2 domain */
@@ -1726,6 +1652,9 @@ static int uvc_video_reqbufs(struct uvc_device *dev, int nbufs)
 static int uvc_handle_streamon_event(struct uvc_device *dev)
 {
     int ret;
+
+    /* Clear shutdown flag - we're starting a new stream */
+    dev->uvc_shutdown_requested = 0;
 
     ret = uvc_video_reqbufs(dev, dev->nbufs);
     if (ret < 0)
@@ -2380,6 +2309,9 @@ static void uvc_events_process(struct uvc_device *dev)
         return;
 
     case UVC_EVENT_STREAMOFF:
+        /* Clear shutdown flag - stream is cleanly stopped, ready for restart */
+        dev->uvc_shutdown_requested = 0;
+        
         /* Stop V4L2 streaming... */
         if (!dev->run_standalone && dev->vdev->is_streaming) {
             /* UVC - V4L2 integrated path. */
