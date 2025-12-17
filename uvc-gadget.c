@@ -100,14 +100,6 @@
  */
 #define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
 
-/*
- * Error buffer handling thresholds to prevent kernel crashes.
- * These limits ensure we don't infinitely re-queue bad buffers.
- */
-#define MAX_BUFFER_COUNT 32              /* Maximum number of buffers supported */
-#define MAX_BUFFER_ERROR_COUNT 10        /* Max errors before discarding a single buffer */
-#define MAX_CONSECUTIVE_ERRORS 50        /* Max consecutive errors before recovery mode */
-
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -282,10 +274,6 @@ struct uvc_device {
     /* uvc buffer queue and dequeue counters */
     unsigned long long int qbuf_count;
     unsigned long long int dqbuf_count;
-
-    /* error buffer tracking */
-    unsigned int error_buf_count[MAX_BUFFER_COUNT]; /* Track error count per buffer */
-    unsigned int consecutive_errors;
 
     /* v4l2 device hook */
     struct v4l2_device *vdev;
@@ -1341,69 +1329,15 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, handle it carefully to avoid
-         * kernel crashes from repeatedly re-queuing bad buffers.
+         * underlying UVC driver gadget, re-queue it back to UVC.
+         * This can happen during normal operation (e.g., host pausing,
+         * stream startup). We must re-queue to UVC to avoid losing buffers.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            /* Validate buffer index to prevent out-of-bounds access */
-            if (ubuf.index >= dev->nbufs) {
-                printf("UVC: Error buffer has invalid index %u (max %u), discarding\n", 
-                       ubuf.index, dev->nbufs - 1);
-                dev->consecutive_errors++;
-                /* Don't re-queue invalid buffer - queue from V4L2 instead */
-                goto queue_from_v4l2;
-            }
-            
-            /* Track error count for this specific buffer */
-            dev->error_buf_count[ubuf.index]++;
-            dev->consecutive_errors++;
-            
-            /* Circuit breaker: If a single buffer has too many errors, don't re-queue it.
-             * This prevents infinite loops that can crash the kernel.
-             */
-            if (dev->error_buf_count[ubuf.index] > MAX_BUFFER_ERROR_COUNT) {
-                printf("UVC: Buffer %u has failed %u times, discarding to prevent kernel crash\n",
-                       ubuf.index, dev->error_buf_count[ubuf.index]);
-                /* Don't re-queue this buffer - get fresh one from V4L2 */
-                goto queue_from_v4l2;
-            }
-            
-            /* Circuit breaker: If we have too many consecutive errors across all buffers,
-             * stop re-queuing to prevent overwhelming the system.
-             */
-            if (dev->consecutive_errors > MAX_CONSECUTIVE_ERRORS) {
-                printf("UVC: Too many consecutive errors (%u), stopping error buffer re-queue\n",
-                       dev->consecutive_errors);
-                /* Reset error tracking and skip to V4L2 queuing */
-                dev->consecutive_errors = 0;
-                goto queue_from_v4l2;
-            }
-            
-            printf("UVC: Buffer %u returned with error flag (error #%u), re-queuing to UVC\n",
-                   ubuf.index, dev->error_buf_count[ubuf.index]);
-            
-            /* Validate buffer pointer for USERPTR mode before re-queuing */
-            if (dev->io == IO_METHOD_USERPTR) {
-                /* Verify the userptr matches one of our known buffers */
-                int valid = 0;
-                for (i = 0; i < dev->nbufs; ++i) {
-                    if (ubuf.m.userptr == (unsigned long)dev->vdev->mem[i].start &&
-                        ubuf.length == dev->vdev->mem[i].length) {
-                        valid = 1;
-                        break;
-                    }
-                }
-                
-                if (!valid) {
-                    printf("UVC: Error buffer has invalid userptr 0x%lx, discarding\n",
-                           ubuf.m.userptr);
-                    dev->consecutive_errors++;
-                    goto queue_from_v4l2;
-                }
-            }
-            
-            /* Re-queue the buffer back to UVC with proper validation */
             struct v4l2_buffer reqbuf;
+            printf("UVC: Buffer returned with error flag, re-queuing to UVC\n");
+            
+            /* Re-queue the buffer back to UVC */
             CLEAR(reqbuf);
             reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
             reqbuf.index = ubuf.index;
@@ -1415,6 +1349,9 @@ static int uvc_video_process(struct uvc_device *dev)
             
             case IO_METHOD_USERPTR:
             default:
+                /* Default to USERPTR to match pattern used elsewhere in this file.
+                 * Only MMAP and USERPTR are defined IO methods for this application.
+                 */
                 reqbuf.memory = V4L2_MEMORY_USERPTR;
                 reqbuf.m.userptr = ubuf.m.userptr;
                 reqbuf.length = ubuf.length;
@@ -1424,23 +1361,12 @@ static int uvc_video_process(struct uvc_device *dev)
             ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
             if (ret < 0) {
                 printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
-                /* Don't return error - try to recover by queuing from V4L2 */
-                dev->consecutive_errors++;
-                goto queue_from_v4l2;
+                return ret;
             }
             
             dev->qbuf_count++;
             return 0;
         }
-        
-        /* Reset consecutive error counter on successful buffer */
-        dev->consecutive_errors = 0;
-        /* Also reset per-buffer error count on success */
-        if (ubuf.index < dev->nbufs) {
-            dev->error_buf_count[ubuf.index] = 0;
-        }
-
-queue_from_v4l2:
 
         /* Queue the buffer to V4L2 domain */
         CLEAR(vbuf);
@@ -1727,17 +1653,10 @@ static int uvc_video_reqbufs(struct uvc_device *dev, int nbufs)
 static int uvc_handle_streamon_event(struct uvc_device *dev)
 {
     int ret;
-    unsigned int i;
 
     ret = uvc_video_reqbufs(dev, dev->nbufs);
     if (ret < 0)
         goto err;
-
-    /* Reset error tracking when starting a new stream */
-    dev->consecutive_errors = 0;
-    for (i = 0; i < dev->nbufs && i < MAX_BUFFER_COUNT; i++) {
-        dev->error_buf_count[i] = 0;
-    }
 
     if (!dev->run_standalone) {
         /* UVC - V4L2 integrated path. */
@@ -1820,15 +1739,15 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise use a safe upper bound.
-         * dwMaxVideoFrameSize must be large enough to handle worst-case MJPEG frames.
-         * Using width * height * 2 provides a conservative upper bound that prevents
-         * host-side renegotiation which can cause ERROR buffer flags and kernel crashes.
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
          */
         if (dev->imgsize > 0) {
             ctrl->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
         }
         break;
     }
@@ -2317,15 +2236,16 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise use a safe upper bound.
-         * dwMaxVideoFrameSize must be large enough to handle worst-case MJPEG frames.
-         * Using width * height * 2 provides a conservative upper bound that prevents
-         * host-side renegotiation which can cause ERROR buffer flags and kernel crashes.
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
+         * a reasonable upper bound. Integer division is intentional here as we
+         * want a conservative (larger) estimate for the max frame size.
          */
         if (dev->imgsize > 0) {
             target->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
+            printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
+            target->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
         }
         break;
     }
