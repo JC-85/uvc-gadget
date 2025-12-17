@@ -216,6 +216,9 @@ static const struct uvc_format_info uvc_formats[] = {
     {V4L2_PIX_FMT_MJPEG, uvc_frames_mjpeg},
 };
 
+static const struct uvc_format_info *uvc_formats_active = uvc_formats;
+static unsigned int uvc_formats_count = ARRAY_SIZE(uvc_formats);
+
 /* ---------------------------------------------------------------------------
  * V4L2 and UVC device instances
  */
@@ -299,6 +302,15 @@ struct uvc_device {
 
 /* forward declarations */
 static int uvc_video_stream(struct uvc_device *dev, int enable);
+static unsigned int uvc_max_payload(const struct uvc_device *dev);
+
+static unsigned int uvc_max_payload(const struct uvc_device *dev)
+{
+    unsigned int max_payload = dev->maxpkt * (dev->mult + 1) * (dev->burst + 1);
+    if (max_payload == 0)
+        max_payload = dev->maxpkt;
+    return max_payload;
+}
 
 
 /* ---------------------------------------------------------------------------
@@ -574,6 +586,10 @@ static int v4l2_uninit_device(struct v4l2_device *dev)
 
     switch (dev->io) {
     case IO_METHOD_MMAP:
+        /* Nothing to do if buffers were already released. */
+        if (!dev->mem || dev->nbufs == 0)
+            return 0;
+
         for (i = 0; i < dev->nbufs; ++i) {
             ret = munmap(dev->mem[i].start, dev->mem[i].length);
             if (ret < 0) {
@@ -1701,9 +1717,16 @@ static int uvc_video_reqbufs(struct uvc_device *dev, int nbufs)
 static int uvc_handle_streamon_event(struct uvc_device *dev)
 {
     int ret;
+    struct v4l2_format vfmt;
+    unsigned int frame_size = dev->imgsize;
 
     /* Clear shutdown flag - we're starting a new stream */
     dev->uvc_shutdown_requested = 0;
+
+    if (!frame_size) {
+        /* Fallback to an uncompressed frame size if the negotiated size is absent. */
+        frame_size = dev->width * dev->height * 2;
+    }
 
     /* Set the UVC format with proper buffer size before allocating buffers */
     ret = uvc_video_set_format(dev);
@@ -1716,15 +1739,45 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
 
     if (!dev->run_standalone) {
         /* UVC - V4L2 integrated path. */
-        if (IO_METHOD_USERPTR == dev->vdev->io) {
-            /*
-             * Ensure that the V4L2 video capture device has already
-             * some buffers queued.
-             */
-            ret = v4l2_reqbufs(dev->vdev, dev->vdev->nbufs);
+        CLEAR(vfmt);
+        vfmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        vfmt.fmt.pix.width = dev->width;
+        vfmt.fmt.pix.height = dev->height;
+        vfmt.fmt.pix.pixelformat = dev->fcc;
+        vfmt.fmt.pix.field = V4L2_FIELD_ANY;
+        vfmt.fmt.pix.sizeimage = frame_size;
+
+        /* Stop any active capture before reconfiguring buffers. */
+        if (dev->vdev->is_streaming) {
+            ret = v4l2_stop_capturing(dev->vdev);
             if (ret < 0)
                 goto err;
+            dev->vdev->is_streaming = 0;
         }
+
+        /* Reinitialize buffers if the format may have changed between streams. */
+        if (dev->vdev->io == IO_METHOD_MMAP && dev->vdev->mem) {
+            ret = v4l2_uninit_device(dev->vdev);
+            if (ret < 0)
+                goto err;
+
+            ret = v4l2_reqbufs(dev->vdev, 0);
+            if (ret < 0)
+                goto err;
+
+            dev->vdev->mem = NULL;
+        }
+
+        dev->vdev->qbuf_count = 0;
+        dev->vdev->dqbuf_count = 0;
+
+        ret = v4l2_set_format(dev->vdev, &vfmt);
+        if (ret < 0)
+            goto err;
+
+        ret = v4l2_reqbufs(dev->vdev, dev->vdev->nbufs);
+        if (ret < 0)
+            goto err;
 
         ret = v4l2_qbuf(dev->vdev);
         if (ret < 0)
@@ -1769,10 +1822,10 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     unsigned int nframes;
 
     if (iformat < 0)
-        iformat = ARRAY_SIZE(uvc_formats) + iformat;
-    if (iformat < 0 || iformat >= (int)ARRAY_SIZE(uvc_formats))
+        iformat = uvc_formats_count + iformat;
+    if (iformat < 0 || iformat >= (int)uvc_formats_count)
         return;
-    format = &uvc_formats[iformat];
+    format = &uvc_formats_active[iformat];
 
     nframes = 0;
     while (format->frames[nframes].width != 0)
@@ -2273,8 +2326,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     }
 
     ctrl = (struct uvc_streaming_control *)&data->data;
-    iformat = clamp((unsigned int)ctrl->bFormatIndex, 1U, (unsigned int)ARRAY_SIZE(uvc_formats));
-    format = &uvc_formats[iformat - 1];
+    iformat = clamp((unsigned int)ctrl->bFormatIndex, 1U, (unsigned int)uvc_formats_count);
+    format = &uvc_formats_active[iformat - 1];
 
     nframes = 0;
     while (format->frames[nframes].width != 0)
@@ -2336,6 +2389,7 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         break;
     }
     target->dwFrameInterval = *interval;
+    target->dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
     if (dev->control == UVC_VS_COMMIT_CONTROL) {
         dev->fcc = format->fcc;
@@ -2349,6 +2403,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
                    target->dwMaxVideoFrameSize,
                    pixfmtstr(dev->fcc));
         }
+        /* Track the negotiated frame size so we can size capture buffers appropriately. */
+        dev->imgsize = target->dwMaxVideoFrameSize;
         
         /* For bulk mode, streaming starts on COMMIT (not on STREAMON event) */
         if (dev->bulk) {
@@ -2444,24 +2500,16 @@ static void uvc_events_process(struct uvc_device *dev)
 static void uvc_events_init(struct uvc_device *dev)
 {
     struct v4l2_event_subscription sub;
-    unsigned int payload_size;
-
-    switch (dev->fcc) {
-    case V4L2_PIX_FMT_YUYV:
-        payload_size = dev->width * dev->height * 2;
-        break;
-    case V4L2_PIX_FMT_MJPEG:
-        payload_size = dev->imgsize;
-        break;
-    }
 
     uvc_fill_streaming_control(dev, &dev->probe, 0, 0);
     uvc_fill_streaming_control(dev, &dev->commit, 0, 0);
 
-    if (dev->bulk) {
-        /* FIXME Crude hack, must be negotiated with the driver. */
-        dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = payload_size;
-    }
+    /*
+     * dwMaxPayloadTransferSize should reflect the USB packet budget for both
+     * bulk and isochronous endpoints so the host doesn't request payloads that
+     * exceed what the endpoint can deliver per (micro)frame.
+     */
+    dev->probe.dwMaxPayloadTransferSize = dev->commit.dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
     memset(&sub, 0, sizeof sub);
     sub.type = UVC_EVENT_SETUP;
@@ -2755,6 +2803,15 @@ int main(int argc, char *argv[])
     udev->mult = mult;
     udev->burst = burst;
     udev->speed = speed;
+
+    /* Advertise only the source format to avoid host renegotiation to unsupported formats. */
+    if (udev->fcc == V4L2_PIX_FMT_MJPEG) {
+        uvc_formats_active = &uvc_formats[1];
+        uvc_formats_count = 1;
+    } else if (udev->fcc == V4L2_PIX_FMT_YUYV) {
+        uvc_formats_active = &uvc_formats[0];
+        uvc_formats_count = 1;
+    }
 
     if (dummy_data_gen_mode || mjpeg_image)
         /* UVC standalone setup. */
