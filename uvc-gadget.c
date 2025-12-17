@@ -51,6 +51,9 @@
 #undef ENABLE_BUFFER_DEBUG
 #undef ENABLE_USB_REQUEST_DEBUG
 
+/* Global quiet mode flag - when set, suppress non-critical messages */
+static int quiet_mode = 0;
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -470,7 +473,8 @@ static void *tee_writer_thread(void *arg)
     struct v4l2_device *dev = (struct v4l2_device *)arg;
     struct tee_frame frame;
     
-    printf("TEE: Writer thread started\n");
+    if (!quiet_mode)
+        printf("TEE: Writer thread started\n");
     
     while (1) {
         if (tee_ring_buffer_pop(dev->tee_ring, &frame) != 0) {
@@ -526,7 +530,8 @@ static void *tee_writer_thread(void *arg)
         free(frame.data);
     }
     
-    printf("TEE: Writer thread exiting\n");
+    if (!quiet_mode)
+        printf("TEE: Writer thread exiting\n");
     return NULL;
 }
 
@@ -675,7 +680,8 @@ static int v4l2_reqbufs_userptr(struct v4l2_device *dev, int nbufs)
     }
 
     dev->nbufs = req.count;
-    printf("V4L2: %u buffers allocated.\n", req.count);
+    if (!quiet_mode)
+        printf("V4L2: %u buffers allocated.\n", req.count);
 
     return 0;
 }
@@ -951,7 +957,8 @@ static int v4l2_start_capturing(struct v4l2_device *dev)
         return ret;
     }
 
-    printf("V4L2: Starting video stream.\n");
+    if (!quiet_mode)
+        printf("V4L2: Starting video stream.\n");
 
     return 0;
 }
@@ -1129,7 +1136,8 @@ static int uvc_video_stream(struct uvc_device *dev, int enable)
         return ret;
     }
 
-    printf("UVC: Starting video stream.\n");
+    if (!quiet_mode)
+        printf("UVC: Starting video stream.\n");
 
     dev->uvc_shutdown_requested = 0;
 
@@ -1329,42 +1337,31 @@ static int uvc_video_process(struct uvc_device *dev)
 
         /*
          * If the dequeued buffer was marked with state ERROR by the
-         * underlying UVC driver gadget, re-queue it back to UVC.
-         * This can happen during normal operation (e.g., host pausing,
-         * stream startup). We must re-queue to UVC to avoid losing buffers.
+         * underlying UVC driver gadget, this typically means the stream
+         * is being torn down (alt setting change, STREAMOFF in flight).
+         *
+         * During startup (before first_buffer_queued), ERROR buffers are
+         * normal "startup churn" from USB negotiation - ignore them and
+         * keep waiting for STREAMON.
+         *
+         * After streaming has started (first_buffer_queued == 1), ERROR
+         * means "host is stopping" - set shutdown flag and stop feeding
+         * buffers until we receive STREAMOFF event and clean restart.
+         *
+         * NEVER re-queue ERROR buffers - that can trigger kernel issues.
          */
         if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
-            struct v4l2_buffer reqbuf;
-            printf("UVC: Buffer returned with error flag, re-queuing to UVC\n");
-            
-            /* Re-queue the buffer back to UVC */
-            CLEAR(reqbuf);
-            reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-            reqbuf.index = ubuf.index;
-            
-            switch (dev->io) {
-            case IO_METHOD_MMAP:
-                reqbuf.memory = V4L2_MEMORY_MMAP;
-                break;
-            
-            case IO_METHOD_USERPTR:
-            default:
-                /* Default to USERPTR to match pattern used elsewhere in this file.
-                 * Only MMAP and USERPTR are defined IO methods for this application.
-                 */
-                reqbuf.memory = V4L2_MEMORY_USERPTR;
-                reqbuf.m.userptr = ubuf.m.userptr;
-                reqbuf.length = ubuf.length;
-                break;
+            if (dev->first_buffer_queued) {
+                /* Streaming was active - ERROR means host is stopping */
+                dev->uvc_shutdown_requested = 1;
+                if (!quiet_mode)
+                    printf("UVC: Buffer returned with ERROR after streaming started - host stopping\n");
+            } else {
+                /* Startup phase - ERROR is normal negotiation churn, ignore it */
+                if (!quiet_mode)
+                    printf("UVC: Buffer returned with ERROR during startup - ignoring\n");
             }
-            
-            ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
-            if (ret < 0) {
-                printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
-                return ret;
-            }
-            
-            dev->qbuf_count++;
+            /* Don't re-queue ERROR buffers - just return and wait for next event */
             return 0;
         }
 
@@ -1538,7 +1535,8 @@ static int uvc_video_reqbufs_mmap(struct uvc_device *dev, int nbufs)
     }
 
     dev->nbufs = rb.count;
-    printf("UVC: %u buffers allocated.\n", rb.count);
+    if (!quiet_mode)
+        printf("UVC: %u buffers allocated.\n", rb.count);
 
     return 0;
 
@@ -1573,7 +1571,8 @@ static int uvc_video_reqbufs_userptr(struct uvc_device *dev, int nbufs)
         return 0;
 
     dev->nbufs = rb.count;
-    printf("UVC: %u buffers allocated.\n", rb.count);
+    if (!quiet_mode)
+        printf("UVC: %u buffers allocated.\n", rb.count);
 
     if (dev->run_standalone) {
         /* Allocate buffers to hold dummy data pattern. */
@@ -1653,6 +1652,9 @@ static int uvc_video_reqbufs(struct uvc_device *dev, int nbufs)
 static int uvc_handle_streamon_event(struct uvc_device *dev)
 {
     int ret;
+
+    /* Clear shutdown flag - we're starting a new stream */
+    dev->uvc_shutdown_requested = 0;
 
     ret = uvc_video_reqbufs(dev, dev->nbufs);
     if (ret < 0)
@@ -2285,9 +2287,10 @@ static void uvc_events_process(struct uvc_device *dev)
 
     case UVC_EVENT_DISCONNECT:
         dev->uvc_shutdown_requested = 1;
-        printf(
-            "UVC: Possible USB shutdown requested from "
-            "Host, seen via UVC_EVENT_DISCONNECT\n");
+        if (!quiet_mode)
+            printf(
+                "UVC: Possible USB shutdown requested from "
+                "Host, seen via UVC_EVENT_DISCONNECT\n");
         return;
 
     case UVC_EVENT_SETUP:
@@ -2306,6 +2309,9 @@ static void uvc_events_process(struct uvc_device *dev)
         return;
 
     case UVC_EVENT_STREAMOFF:
+        /* Clear shutdown flag - stream is cleanly stopped, ready for restart */
+        dev->uvc_shutdown_requested = 0;
+
         /* Stop V4L2 streaming... */
         if (!dev->run_standalone && dev->vdev->is_streaming) {
             /* UVC - V4L2 integrated path. */
@@ -2426,6 +2432,7 @@ static void usage(const char *argv0)
     fprintf(stderr, " -t		Streaming burst (b/w 0 and 15)\n");
     fprintf(stderr, " -u device	UVC Video Output device\n");
     fprintf(stderr, " -v device	V4L2 Video Capture device\n");
+    fprintf(stderr, " -q		Quiet mode (suppress non-critical messages)\n");
 }
 
 int main(int argc, char *argv[])
@@ -2455,7 +2462,7 @@ int main(int argc, char *argv[])
 
     signal(SIGPIPE, SIG_IGN);
 
-    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:T:")) != -1) {
+    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:T:q")) != -1) {
         switch (opt) {
         case 'b':
             bulk_mode = 1;
@@ -2560,6 +2567,10 @@ int main(int argc, char *argv[])
             tee_path = optarg;
             break;
 
+        case 'q':
+            quiet_mode = 1;
+            break;
+
         default:
             printf("Invalid option '-%c'\n", opt);
             usage(argv[0]);
@@ -2611,7 +2622,8 @@ int main(int argc, char *argv[])
                 return 1;
             }
             vdev->tee_thread_running = 1;
-            printf("TEE: Ring buffer and writer thread initialized\n");
+            if (!quiet_mode)
+                printf("TEE: Ring buffer and writer thread initialized\n");
         }
     }
 
@@ -2754,12 +2766,7 @@ int main(int argc, char *argv[])
         }
 
         if (0 == ret) {
-            /* Only exit on timeout if shutdown was requested */
-            if (udev->uvc_shutdown_requested) {
-                printf("select timeout after shutdown request\n");
-                break;
-            }
-            /* Otherwise continue - timeout is normal when idle */
+            /* Timeout is normal when idle or during stream pause - just continue */
             continue;
         }
 
