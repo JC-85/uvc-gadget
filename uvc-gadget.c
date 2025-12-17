@@ -1339,16 +1339,19 @@ static int uvc_video_process(struct uvc_device *dev)
                 reqbuf.memory = V4L2_MEMORY_MMAP;
                 break;
             case IO_METHOD_USERPTR:
-            default:
                 reqbuf.memory = V4L2_MEMORY_USERPTR;
                 reqbuf.m.userptr = ubuf.m.userptr;
                 reqbuf.length = ubuf.length;
                 break;
+            default:
+                printf("UVC: Unknown IO method in error buffer handling\n");
+                return -EINVAL;
             }
             
             ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &reqbuf);
             if (ret < 0) {
                 printf("UVC: Failed to re-queue error buffer: %s (%d)\n", strerror(errno), errno);
+                /* Buffer is lost, but keep accounting consistent by not adjusting counts */
                 return ret;
             }
             
