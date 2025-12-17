@@ -1741,15 +1741,15 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound. Integer division is intentional here as we
-         * want a conservative (larger) estimate for the max frame size.
+        /* Use dev->imgsize if valid, otherwise use width*height*2 as buffer size.
+         * MJPEG compression varies significantly, but we need sufficient buffer space
+         * for worst-case frames. Using width*height*2 matches YUYV uncompressed size
+         * and provides adequate headroom for highly detailed or noisy frames.
          */
         if (dev->imgsize > 0) {
             ctrl->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         }
         break;
     }
@@ -2234,12 +2234,28 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
                ctrl->dwFrameInterval,
                ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
 
-    /* Find the closest matching interval. Prefer the smallest interval (highest frame rate)
-     * when the requested interval is between two supported values, as per UVC spec guidelines.
+    /* Find the closest matching interval to what the host requested.
      * The intervals array is sorted in ascending order (fastest to slowest frame rate).
+     * We select the interval with minimum distance to the requested value.
+     * This honors the host's bandwidth/performance requirements more accurately.
      */
-    while (interval[1] && (interval[1] <= ctrl->dwFrameInterval))
-        ++interval;
+    {
+        const unsigned int *best = interval;
+        const unsigned int *current = interval;
+        unsigned int best_diff = (ctrl->dwFrameInterval > *best) ? 
+                                 (ctrl->dwFrameInterval - *best) : (*best - ctrl->dwFrameInterval);
+        
+        while (current[1]) {
+            current++;
+            unsigned int diff = (ctrl->dwFrameInterval > *current) ?
+                               (ctrl->dwFrameInterval - *current) : (*current - ctrl->dwFrameInterval);
+            if (diff < best_diff) {
+                best_diff = diff;
+                best = current;
+            }
+        }
+        interval = best;
+    }
 
     target->bFormatIndex = iformat;
     target->bFrameIndex = iframe;
@@ -2248,16 +2264,15 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
-         * MJPEG compression varies, but width * height / COMPRESSION_RATIO is
-         * a reasonable upper bound. Integer division is intentional here as we
-         * want a conservative (larger) estimate for the max frame size.
+        /* Use dev->imgsize if valid, otherwise use width*height*2 as buffer size.
+         * MJPEG compression varies significantly, but we need sufficient buffer space
+         * for worst-case frames. Using width*height*2 matches YUYV uncompressed size
+         * and provides adequate headroom for highly detailed or noisy frames.
          */
         if (dev->imgsize > 0) {
             target->dwMaxVideoFrameSize = dev->imgsize;
         } else {
-            printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
-            target->dwMaxVideoFrameSize = frame->width * frame->height / MJPEG_COMPRESSION_RATIO_ESTIMATE;
+            target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         }
         break;
     }
