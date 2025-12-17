@@ -1728,7 +1728,14 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        ctrl->dwMaxVideoFrameSize = dev->imgsize;
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height * 0.5 is a reasonable upper bound.
+         */
+        if (dev->imgsize > 0) {
+            ctrl->dwMaxVideoFrameSize = dev->imgsize;
+        } else {
+            ctrl->dwMaxVideoFrameSize = frame->width * frame->height / 2;
+        }
         break;
     }
 
@@ -2216,9 +2223,15 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         target->dwMaxVideoFrameSize = frame->width * frame->height * 2;
         break;
     case V4L2_PIX_FMT_MJPEG:
-        if (dev->imgsize == 0)
-            printf("WARNING: MJPEG requested and no image loaded.\n");
-        target->dwMaxVideoFrameSize = dev->imgsize;
+        /* Use dev->imgsize if valid, otherwise estimate based on frame dimensions.
+         * MJPEG compression varies, but width * height * 0.5 is a reasonable upper bound.
+         */
+        if (dev->imgsize > 0) {
+            target->dwMaxVideoFrameSize = dev->imgsize;
+        } else {
+            printf("WARNING: MJPEG requested and no image loaded, using estimated size.\n");
+            target->dwMaxVideoFrameSize = frame->width * frame->height / 2;
+        }
         break;
     }
     target->dwFrameInterval = *interval;
