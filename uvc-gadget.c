@@ -100,6 +100,14 @@
  */
 #define MJPEG_COMPRESSION_RATIO_ESTIMATE 2
 
+/*
+ * Error buffer handling thresholds to prevent kernel crashes.
+ * These limits ensure we don't infinitely re-queue bad buffers.
+ */
+#define MAX_BUFFER_COUNT 32              /* Maximum number of buffers supported */
+#define MAX_BUFFER_ERROR_COUNT 10        /* Max errors before discarding a single buffer */
+#define MAX_CONSECUTIVE_ERRORS 50        /* Max consecutive errors before recovery mode */
+
 /* ---------------------------------------------------------------------------
  * Generic stuff
  */
@@ -276,7 +284,7 @@ struct uvc_device {
     unsigned long long int dqbuf_count;
 
     /* error buffer tracking */
-    unsigned int error_buf_count[32]; /* Track error count per buffer (max 32 buffers) */
+    unsigned int error_buf_count[MAX_BUFFER_COUNT]; /* Track error count per buffer */
     unsigned int consecutive_errors;
 
     /* v4l2 device hook */
@@ -1353,7 +1361,7 @@ static int uvc_video_process(struct uvc_device *dev)
             /* Circuit breaker: If a single buffer has too many errors, don't re-queue it.
              * This prevents infinite loops that can crash the kernel.
              */
-            if (dev->error_buf_count[ubuf.index] > 10) {
+            if (dev->error_buf_count[ubuf.index] > MAX_BUFFER_ERROR_COUNT) {
                 printf("UVC: Buffer %u has failed %u times, discarding to prevent kernel crash\n",
                        ubuf.index, dev->error_buf_count[ubuf.index]);
                 /* Don't re-queue this buffer - get fresh one from V4L2 */
@@ -1363,7 +1371,7 @@ static int uvc_video_process(struct uvc_device *dev)
             /* Circuit breaker: If we have too many consecutive errors across all buffers,
              * stop re-queuing to prevent overwhelming the system.
              */
-            if (dev->consecutive_errors > 50) {
+            if (dev->consecutive_errors > MAX_CONSECUTIVE_ERRORS) {
                 printf("UVC: Too many consecutive errors (%u), stopping error buffer re-queue\n",
                        dev->consecutive_errors);
                 /* Reset error tracking and skip to V4L2 queuing */
@@ -1727,7 +1735,7 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
 
     /* Reset error tracking when starting a new stream */
     dev->consecutive_errors = 0;
-    for (i = 0; i < dev->nbufs && i < 32; i++) {
+    for (i = 0; i < dev->nbufs && i < MAX_BUFFER_COUNT; i++) {
         dev->error_buf_count[i] = 0;
     }
 
