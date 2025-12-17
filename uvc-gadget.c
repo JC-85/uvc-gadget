@@ -146,13 +146,13 @@ static const struct uvc_frame_info uvc_frames_yuyv[] = {
     {
         WIDTH1,
         HEIGHT1,
-        //{666666, 10000000, 50000000, 0},
-        {50000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {50000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
@@ -168,13 +168,13 @@ static const struct uvc_frame_info uvc_frames_mjpeg[] = {
     {
         WIDTH1,
         HEIGHT1,
-        //{666666, 10000000, 50000000, 0},
-        {50000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps, 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {50000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
