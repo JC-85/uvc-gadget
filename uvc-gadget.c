@@ -823,7 +823,7 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     /* Return immediately if V4l2 streaming has not yet started. */
     if (!dev->is_streaming) {
-        DEBUG_PRINT("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
+        DEBUG_PRINT_THROTTLED("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
         return 0;
     }
 
@@ -1931,7 +1931,7 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     ctrl->dwFrameInterval = frame->intervals[0];
     ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
     DEBUG_PRINT("UVC: Negotiated frame size: %u bytes\n", ctrl->dwMaxVideoFrameSize);
-    
+
     /* TODO: the UVC maxpayload transfer size should be filled
      * by the driver.
      */
