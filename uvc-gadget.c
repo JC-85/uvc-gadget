@@ -1803,7 +1803,7 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
     int ret;
     struct v4l2_format vfmt;
     size_t frame_size = uvc_active_frame_size(dev);
-
+    DEBUG_PRINT("UVC: Frame size for current format: %zu bytes\n", frame_size);
     /* Clear shutdown flag - we're starting a new stream */
     dev->uvc_shutdown_requested = 0;
 
@@ -1930,7 +1930,8 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     ctrl->bFrameIndex = iframe + 1;
     ctrl->dwFrameInterval = frame->intervals[0];
     ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
-
+    DEBUG_PRINT("UVC: Negotiated frame size: %u bytes\n", ctrl->dwMaxVideoFrameSize);
+    
     /* TODO: the UVC maxpayload transfer size should be filled
      * by the driver.
      */
