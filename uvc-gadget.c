@@ -823,7 +823,8 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     /* Return immediately if V4l2 streaming has not yet started. */
     if (!dev->is_streaming) {
-        DEBUG_PRINT_THROTTLED("V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
+        DEBUG_PRINT_THROTTLED(dqbuf_throttle,30,
+            "V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
         return 0;
     }
 
