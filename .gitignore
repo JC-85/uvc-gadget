@@ -1,3 +1,5 @@
 *.o
 uvc-gadget
 .vscode
+run.sh
+deploy.sh
