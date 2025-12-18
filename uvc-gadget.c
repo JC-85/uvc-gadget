@@ -327,7 +327,7 @@ static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned i
 {
     size_t fallback = uvc_default_frame_size(width, height);
     size_t negotiated = dev->imgsize ? dev->imgsize : fallback;
-
+    DEBUG_PRINT("UVC: Negotiated frame size: %zu bytes (default footprint: %zu bytes)\n", negotiated, fallback);
     /* Never allow the negotiated size to be smaller than the raw frame footprint. */
     return max(negotiated, fallback);
 }
