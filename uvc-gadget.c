@@ -847,10 +847,6 @@ static int v4l2_process_data(struct v4l2_device *dev)
         return 0;
     }
 
-    if (dev->udev->first_buffer_queued)
-        if (dev->dqbuf_count >= dev->qbuf_count)
-            return 0;
-
     /* Dequeue spent buffer rom V4L2 domain. */
     CLEAR(vbuf);
 
@@ -954,11 +950,11 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
     {
         unsigned int capacity = 0;
-        if (dev->udev->io == IO_METHOD_MMAP && dev->udev->mem) {
-            capacity = dev->udev->mem[ubuf.index].length;
-        } else {
-            capacity = ubuf.length;
-        }
+    if (dev->udev->io == IO_METHOD_MMAP && dev->udev->mem) {
+        capacity = dev->udev->mem[ubuf.index].length;
+    } else {
+        capacity = ubuf.length;
+    }
 
         if (capacity > 0 && ubuf.bytesused > capacity) {
             if (!quiet_mode)
@@ -1008,6 +1004,14 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         dev->udev->first_buffer_queued = 1;
         dev->udev->is_streaming = 1;
     }
+
+    /* Re-queue the capture buffer back to V4L2 for the next frame. */
+    ret = ioctl(dev->v4l2_fd, VIDIOC_QBUF, &vbuf);
+    if (ret < 0) {
+        printf("V4L2: VIDIOC_QBUF (requeue) failed : %s (%d).\n", strerror(errno), errno);
+        return ret;
+    }
+    dev->qbuf_count++;
 
     return 0;
 }
