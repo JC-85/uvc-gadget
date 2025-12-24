@@ -902,8 +902,24 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
     ubuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     switch (dev->udev->io) {
     case IO_METHOD_MMAP: {
+        /* Dequeue an available UVC buffer to fill. */
+        struct v4l2_buffer uvc_dq = {0};
+        uvc_dq.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+        uvc_dq.memory = V4L2_MEMORY_MMAP;
+        ret = ioctl(dev->udev->uvc_fd, VIDIOC_DQBUF, &uvc_dq);
+        if (ret < 0) {
+            if (errno == EAGAIN) {
+                /* No UVC buffer ready yet; try later. */
+                return 0;
+            }
+            DEBUG_PRINT("UVC: Unable to dequeue buffer for copy: %s (%d)\n", strerror(errno), errno);
+            return ret;
+        }
+        dev->udev->dqbuf_count++;
+
+        ubuf = uvc_dq;
         ubuf.memory = V4L2_MEMORY_MMAP;
-        ubuf.index = vbuf.index;
+        ubuf.index = uvc_dq.index;
         ubuf.m.offset = dev->udev->mem[ubuf.index].buf.m.offset;
         ubuf.length = dev->udev->mem[ubuf.index].length;
 
@@ -1458,6 +1474,9 @@ static int uvc_video_process(struct uvc_device *dev)
 
     case IO_METHOD_USERPTR:
     default:
+        /* Integrated MMAP path is handled in v4l2_process_data. */
+        if (!dev->run_standalone)
+            return 0;
         ubuf.memory = V4L2_MEMORY_USERPTR;
         break;
     }
