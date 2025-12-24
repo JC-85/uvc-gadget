@@ -1463,6 +1463,10 @@ static int uvc_video_process(struct uvc_device *dev)
      */
     if (!dev->is_streaming)
         return 0;
+
+    /* Integrated MMAP path is handled in v4l2_process_data(). */
+    if (!dev->run_standalone && dev->io == IO_METHOD_MMAP)
+        return 0;
     /* Prepare a v4l2 buffer to be dequeued from UVC domain. */
     CLEAR(ubuf);
 
