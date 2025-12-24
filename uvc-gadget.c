@@ -89,7 +89,8 @@ static int quiet_mode = 0;
 struct uvc_device;
 
 static size_t uvc_default_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height);
-static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height);
+static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height,
+                                        uint32_t requested);
 static size_t uvc_active_frame_size(const struct uvc_device *dev);
 
 /*
@@ -332,18 +333,29 @@ static size_t uvc_default_frame_size(const struct uvc_device *dev, unsigned int 
     }
 }
 
-static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height)
+static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height,
+                                        uint32_t requested)
 {
     size_t fallback = uvc_default_frame_size(dev, width, height);
-    size_t negotiated = dev->imgsize ? dev->imgsize : fallback;
-    DEBUG_PRINT("UVC: Negotiated frame size: %zu bytes (default footprint: %zu bytes)\n", negotiated, fallback);
+    size_t negotiated = 0;
+
+    if (requested) {
+        negotiated = requested;
+    } else if (dev->imgsize) {
+        negotiated = dev->imgsize;
+    } else {
+        negotiated = fallback;
+    }
+
+    DEBUG_PRINT("UVC: Negotiated frame size: %zu bytes (requested=%u, default footprint: %zu bytes)\n", negotiated,
+                requested, fallback);
     /* Never allow the negotiated size to be smaller than the raw frame footprint. */
     return max(negotiated, fallback);
 }
 
 static size_t uvc_active_frame_size(const struct uvc_device *dev)
 {
-    return uvc_negotiated_frame_size(dev, dev->width, dev->height);
+    return uvc_negotiated_frame_size(dev, dev->width, dev->height, 0);
 }
 
 
@@ -1930,7 +1942,7 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     ctrl->bFormatIndex = iformat + 1;
     ctrl->bFrameIndex = iframe + 1;
     ctrl->dwFrameInterval = frame->intervals[0];
-    ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
+    ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height, 0);
     DEBUG_PRINT("UVC: Negotiated frame size: %u bytes\n", ctrl->dwMaxVideoFrameSize);
 
     /* TODO: the UVC maxpayload transfer size should be filled
@@ -2443,7 +2455,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
 
     target->bFormatIndex = iformat;
     target->bFrameIndex = iframe;
-    target->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height);
+    target->dwMaxVideoFrameSize =
+        (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height, ctrl->dwMaxVideoFrameSize);
     target->dwFrameInterval = *interval;
     target->dwMaxPayloadTransferSize = uvc_max_payload(dev);
 
