@@ -2400,9 +2400,9 @@ static void uvc_events_process_streaming(struct uvc_device *dev, uint8_t req, ui
         else
             memcpy(ctrl, &dev->commit, sizeof *ctrl);
         if (!quiet_mode) {
-            printf("%s GET_CUR: %ux%u interval=%u (%.2f fps)\n",
+            printf("%s GET_CUR: format=%u frame=%u interval=%u (%.2f fps)\n",
                    (cs == UVC_VS_PROBE_CONTROL) ? "PROBE" : "COMMIT",
-                   ctrl->wWidth, ctrl->wHeight,
+                   ctrl->bFormatIndex, ctrl->bFrameIndex,
                    ctrl->dwFrameInterval,
                    ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
         }
