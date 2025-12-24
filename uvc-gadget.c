@@ -837,7 +837,7 @@ static int v4l2_process_data(struct v4l2_device *dev)
     struct v4l2_buffer ubuf;
 
     static int call_count = 0;
-    if (++call_count <= 5 || call_count % 1000 == 0) {
+    if (++call_count <= 5 || call_count % 5000 == 0) {
         DEBUG_PRINT("V4L2: v4l2_process_data called #%d, is_streaming=%d, dqbuf=%llu, qbuf=%llu\n",
                    call_count, dev->is_streaming, dev->dqbuf_count, dev->udev ? dev->udev->qbuf_count : 0);
     }
