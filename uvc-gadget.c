@@ -1129,6 +1129,8 @@ static int v4l2_start_capturing(struct v4l2_device *dev)
     if (!quiet_mode)
         printf("V4L2: Starting video stream.\n");
 
+    dev->is_streaming = 1;
+
     return 0;
 }
 
@@ -1152,6 +1154,8 @@ static int v4l2_stop_capturing(struct v4l2_device *dev)
         /* Nothing to do. */
         break;
     }
+
+    dev->is_streaming = 0;
 
     return 0;
 }
