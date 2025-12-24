@@ -893,6 +893,31 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
 tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
+    /* Drop corrupt MJPEG frames early. */
+    if (vbuf.flags & V4L2_BUF_FLAG_ERROR) {
+        DEBUG_PRINT("V4L2: Dropping frame idx=%d due to ERROR flag\n", vbuf.index);
+        goto requeue_v4l2;
+    }
+
+    if (dev->udev->fcc == V4L2_PIX_FMT_MJPEG && vbuf.bytesused >= 2) {
+        const unsigned char *start = (const unsigned char *)frame_ptr;
+        const unsigned char *end = start + vbuf.bytesused;
+        if (!(start[0] == 0xff && start[1] == 0xd8) || !(end[-2] == 0xff && end[-1] == 0xd9)) {
+            DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
+                "V4L2: Dropping MJPEG frame idx=%d (missing SOI/EOI) bytes=%u\n",
+                vbuf.index, vbuf.bytesused);
+            goto requeue_v4l2;
+        }
+        /* Optional: drop obviously tiny frames (< 1/10 raw size) */
+        size_t raw_min = (size_t)dev->udev->width * dev->udev->height / 10;
+        if (vbuf.bytesused < raw_min) {
+            DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
+                "V4L2: Dropping MJPEG frame idx=%d too small (%u bytes)\n",
+                vbuf.index, vbuf.bytesused);
+            goto requeue_v4l2;
+        }
+    }
+
     /* Queue video buffer to UVC domain. */
     CLEAR(ubuf);
 
@@ -1018,6 +1043,7 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         dev->udev->is_streaming = 1;
     }
 
+requeue_v4l2:
     /* Re-queue the capture buffer back to V4L2 for the next frame. */
     ret = ioctl(dev->v4l2_fd, VIDIOC_QBUF, &vbuf);
     if (ret < 0) {
