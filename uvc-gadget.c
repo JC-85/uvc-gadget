@@ -921,6 +921,13 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
                 vbuf.index, vbuf.bytesused);
             goto requeue_v4l2;
         }
+        /* Drop obviously truncated MJPEG frames that are too small to decode sanely. */
+        if (vbuf.bytesused < 60000) {
+            DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
+                "V4L2: Dropping short MJPEG frame idx=%d bytes=%u\n",
+                vbuf.index, vbuf.bytesused);
+            goto requeue_v4l2;
+        }
     }
 
     /* Queue video buffer to UVC domain. */
