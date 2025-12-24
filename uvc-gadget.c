@@ -837,15 +837,13 @@ static int v4l2_process_data(struct v4l2_device *dev)
     struct v4l2_buffer ubuf;
 
     static int call_count = 0;
-    if (++call_count <= 5 || call_count % 100 == 0) {
+    if (++call_count <= 5 || call_count % 1000 == 0) {
         DEBUG_PRINT("V4L2: v4l2_process_data called #%d, is_streaming=%d, dqbuf=%llu, qbuf=%llu\n",
                    call_count, dev->is_streaming, dev->dqbuf_count, dev->udev ? dev->udev->qbuf_count : 0);
     }
 
     /* Return immediately if V4l2 streaming has not yet started. */
     if (!dev->is_streaming) {
-        DEBUG_PRINT_THROTTLED(dqbuf_throttle,100,
-            "V4L2: Skipping frame - not streaming (is_streaming=%d)\n", dev->is_streaming);
         return 0;
     }
 
@@ -911,6 +909,9 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         ubuf.length = dev->udev->mem[vbuf.index].length;
         ubuf.index = vbuf.index;
         ubuf.bytesused = vbuf.bytesused;
+        DEBUG_PRINT_THROTTLED(qbuf_throttle, 50,
+            "UVC(MMAP): Preparing buffer idx=%d capacity=%u bytesused=%u active_size=%zu\n",
+            ubuf.index, ubuf.length, ubuf.bytesused, uvc_active_frame_size(dev->udev));
         break;
 
     case IO_METHOD_USERPTR:
@@ -1576,6 +1577,8 @@ static int uvc_video_qbuf_mmap(struct uvc_device *dev)
         if (dev->run_standalone)
             uvc_video_fill_buffer(dev, &(dev->mem[i].buf));
 
+        DEBUG_PRINT("UVC(MMAP): Initial QBUF idx=%d length=%u active_size=%zu\n",
+                   dev->mem[i].buf.index, dev->mem[i].buf.length, uvc_active_frame_size(dev));
         ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &(dev->mem[i].buf));
         if (ret < 0) {
             printf("UVC: VIDIOC_QBUF failed : %s (%d).\n", strerror(errno), errno);
