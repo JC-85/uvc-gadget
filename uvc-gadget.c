@@ -2399,6 +2399,13 @@ static void uvc_events_process_streaming(struct uvc_device *dev, uint8_t req, ui
             memcpy(ctrl, &dev->probe, sizeof *ctrl);
         else
             memcpy(ctrl, &dev->commit, sizeof *ctrl);
+        if (!quiet_mode) {
+            printf("%s GET_CUR: %ux%u interval=%u (%.2f fps)\n",
+                   (cs == UVC_VS_PROBE_CONTROL) ? "PROBE" : "COMMIT",
+                   ctrl->wWidth, ctrl->wHeight,
+                   ctrl->dwFrameInterval,
+                   ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
+        }
         break;
 
     case UVC_GET_MIN:
