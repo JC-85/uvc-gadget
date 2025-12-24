@@ -1936,11 +1936,10 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
     if (ret < 0)
         goto err;
 
-    if (dev->run_standalone) {
-        uvc_video_stream(dev, 1);
-        dev->first_buffer_queued = 1;
-        dev->is_streaming = 1;
-    }
+    /* Start UVC streaming once buffers are queued. */
+    uvc_video_stream(dev, 1);
+    dev->first_buffer_queued = 1;
+    dev->is_streaming = 1;
 
     return 0;
 
