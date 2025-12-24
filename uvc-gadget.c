@@ -179,13 +179,13 @@ static const struct uvc_frame_info uvc_frames_yuyv[] = {
     {
         WIDTH1,
         HEIGHT1,
-        /* Frame intervals in 100ns units: 666666 = 15fps (default), 333333 = 30fps, 10000000 = 1fps */
-        {666666, 333333, 10000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps (default), 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {666666, 333333, 10000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
@@ -201,13 +201,13 @@ static const struct uvc_frame_info uvc_frames_mjpeg[] = {
     {
         WIDTH1,
         HEIGHT1,
-        /* Frame intervals in 100ns units: 666666 = 15fps (default), 333333 = 30fps, 10000000 = 1fps */
-        {666666, 333333, 10000000, 0},
+        /* Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps (default), 10000000 = 1fps */
+        {333333, 666666, 10000000, 0},
     },
     {
         WIDTH2,
         HEIGHT2,
-        {666666, 333333, 10000000, 0},
+        {333333, 666666, 10000000, 0},
     },
     {
         0,
@@ -2095,7 +2095,11 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
     ctrl->bmHint = 1;
     ctrl->bFormatIndex = iformat + 1;
     ctrl->bFrameIndex = iframe + 1;
-    ctrl->dwFrameInterval = frame->intervals[0];
+    /* Prefer 15fps (666666) if offered, otherwise use the fastest. */
+    if (frame->intervals[1] == 666666)
+        ctrl->dwFrameInterval = frame->intervals[1];
+    else
+        ctrl->dwFrameInterval = frame->intervals[0];
     ctrl->dwMaxVideoFrameSize = (uint32_t)uvc_negotiated_frame_size(dev, frame->width, frame->height, 0);
     DEBUG_PRINT("UVC: Negotiated frame size: %u bytes\n", ctrl->dwMaxVideoFrameSize);
 
