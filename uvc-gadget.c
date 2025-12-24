@@ -284,6 +284,12 @@ struct uvc_device {
     unsigned int width;
     unsigned int height;
 
+    /* Streaming timing */
+    uint64_t frame_interval_us;
+    uint64_t stream_start_us;
+    uint64_t last_timestamp_us;
+    int stream_ts_valid;
+
     unsigned int bulk;
     uint8_t color;
     unsigned int imgsize;
@@ -909,6 +915,12 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
             goto requeue_v4l2;
         }
         /* Accept small MJPEG frames as long as markers are present. */
+        if (vbuf.bytesused < 1024) {
+            DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
+                "V4L2: Dropping tiny MJPEG frame idx=%d bytes=%u\n",
+                vbuf.index, vbuf.bytesused);
+            goto requeue_v4l2;
+        }
     }
 
     /* Queue video buffer to UVC domain. */
@@ -961,10 +973,36 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
         /* Tag monotonic timestamp and sequence for host consumption. */
         {
             struct timespec ts;
+            uint64_t ts_us;
+            uint64_t seq = dev->udev->qbuf_count;
+            uint64_t interval = dev->udev->frame_interval_us;
+
             clock_gettime(CLOCK_MONOTONIC, &ts);
-            ubuf.timestamp.tv_sec = ts.tv_sec;
-            ubuf.timestamp.tv_usec = ts.tv_nsec / 1000;
-            ubuf.sequence = dev->udev->qbuf_count;
+            if (!dev->udev->stream_ts_valid) {
+                dev->udev->stream_start_us = (uint64_t)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000ULL;
+                dev->udev->last_timestamp_us = dev->udev->stream_start_us;
+                dev->udev->stream_ts_valid = 1;
+            }
+
+            if (interval) {
+                ts_us = dev->udev->stream_start_us + seq * interval;
+            } else {
+                ts_us = (uint64_t)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000ULL;
+            }
+            if (ts_us <= dev->udev->last_timestamp_us)
+                ts_us = dev->udev->last_timestamp_us + 1;
+
+            dev->udev->last_timestamp_us = ts_us;
+
+            ubuf.timestamp.tv_sec = ts_us / 1000000ULL;
+            ubuf.timestamp.tv_usec = ts_us % 1000000ULL;
+            ubuf.sequence = seq;
+            ubuf.flags |= V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+            ubuf.field = V4L2_FIELD_NONE;
+            DEBUG_PRINT_THROTTLED(qbuf_throttle, 50,
+                "UVC(MMAP): ts=%llu us seq=%llu interval_us=%llu bytes=%u\n",
+                (unsigned long long)ts_us, (unsigned long long)seq,
+                (unsigned long long)interval, ubuf.bytesused);
         }
         break;
     }
@@ -1904,6 +1942,11 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
     DEBUG_PRINT("UVC: Frame size for current format: %zu bytes\n", frame_size);
     /* Clear shutdown flag - we're starting a new stream */
     dev->uvc_shutdown_requested = 0;
+    /* Reset stream accounting */
+    dev->qbuf_count = 0;
+    dev->dqbuf_count = 0;
+    dev->stream_ts_valid = 0;
+    dev->last_timestamp_us = 0;
 
     if (!dev->run_standalone) {
         /* UVC - V4L2 integrated path. */
@@ -2546,6 +2589,10 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->fcc = format->fcc;
         dev->width = frame->width;
         dev->height = frame->height;
+        dev->frame_interval_us = target->dwFrameInterval ? (uint64_t)(target->dwFrameInterval / 10) : 0;
+        if (!dev->frame_interval_us && !quiet_mode) {
+            printf("UVC: WARNING - frame interval is zero; timestamps will use realtime\n");
+        }
         if (!quiet_mode) {
             printf("COMMIT: Selected %ux%u interval=%u (%.2f fps), buffer size=%u bytes, format=%c%c%c%c\n",
                    frame->width, frame->height,
