@@ -939,6 +939,15 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
             ubuf.bytesused = vbuf.bytesused;
             ubuf.length = vbuf.length;
         }
+
+        /* Tag monotonic timestamp and sequence for host consumption. */
+        {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            ubuf.timestamp.tv_sec = ts.tv_sec;
+            ubuf.timestamp.tv_usec = ts.tv_nsec / 1000;
+            ubuf.sequence = dev->udev->qbuf_count;
+        }
         break;
     }
 
