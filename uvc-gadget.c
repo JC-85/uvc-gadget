@@ -901,18 +901,28 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
 
     ubuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     switch (dev->udev->io) {
-    case IO_METHOD_MMAP:
+    case IO_METHOD_MMAP: {
         ubuf.memory = V4L2_MEMORY_MMAP;
-        /* Use UVC buffer's actual allocated length, not V4L2's length.
-         * V4L2 camera driver may allocate different sized buffers than UVC expects.
-         * We must use the UVC buffer length that was allocated via VIDIOC_REQBUFS. */
-        ubuf.length = dev->udev->mem[vbuf.index].length;
         ubuf.index = vbuf.index;
-        ubuf.bytesused = vbuf.bytesused;
-        DEBUG_PRINT_THROTTLED(qbuf_throttle, 50,
-            "UVC(MMAP): Preparing buffer idx=%d capacity=%u bytesused=%u active_size=%zu\n",
-            ubuf.index, ubuf.length, ubuf.bytesused, uvc_active_frame_size(dev->udev));
+
+        /* Copy captured frame into the UVC-owned MMAP buffer. */
+        if (dev->udev->mem && dev->udev->mem[ubuf.index].start) {
+            size_t capacity = dev->udev->mem[ubuf.index].length;
+            size_t copy_size = vbuf.bytesused;
+            if (copy_size > capacity)
+                copy_size = capacity;
+            memcpy(dev->udev->mem[ubuf.index].start, frame_ptr, copy_size);
+            ubuf.bytesused = copy_size;
+            ubuf.length = capacity;
+            DEBUG_PRINT_THROTTLED(qbuf_throttle, 50,
+                "UVC(MMAP): Copying frame -> idx=%d copy=%zu cap=%zu active_size=%zu\n",
+                ubuf.index, copy_size, capacity, uvc_active_frame_size(dev->udev));
+        } else {
+            ubuf.bytesused = vbuf.bytesused;
+            ubuf.length = vbuf.length;
+        }
         break;
+    }
 
     case IO_METHOD_USERPTR:
     default:
@@ -1867,8 +1877,15 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         dev->vdev->dqbuf_count = 0;
 
         ret = v4l2_set_format(dev->vdev, &vfmt);
-        if (ret < 0)
-            goto err;
+        if (ret < 0) {
+            if (errno == EBUSY) {
+                printf("V4L2: Format change busy, using current format instead\n");
+                if (v4l2_get_format(dev->vdev) < 0)
+                    goto err;
+            } else {
+                goto err;
+            }
+        }
 
         ret = v4l2_reqbufs(dev->vdev, dev->vdev->nbufs);
         if (ret < 0)
@@ -2896,12 +2913,12 @@ int main(int argc, char *argv[])
         vdev->nbufs = nbufs;
 
         /*
-         * IO methods used at UVC and V4L2 domains must be
-         * complementary to avoid any memcpy from the CPU.
+         * IO methods: favor MMAP on V4L2 when UVC uses MMAP so we can
+         * copy into the UVC-owned buffers deterministically.
          */
         switch (uvc_io_method) {
         case IO_METHOD_MMAP:
-            vdev->io = IO_METHOD_USERPTR;
+            vdev->io = IO_METHOD_MMAP;
             break;
 
         case IO_METHOD_USERPTR:
