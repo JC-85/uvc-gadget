@@ -904,6 +904,8 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
     case IO_METHOD_MMAP: {
         ubuf.memory = V4L2_MEMORY_MMAP;
         ubuf.index = vbuf.index;
+        ubuf.m.offset = dev->udev->mem[ubuf.index].buf.m.offset;
+        ubuf.length = dev->udev->mem[ubuf.index].length;
 
         /* Copy captured frame into the UVC-owned MMAP buffer. */
         if (dev->udev->mem && dev->udev->mem[ubuf.index].start) {
@@ -1577,8 +1579,6 @@ static int uvc_video_qbuf_mmap(struct uvc_device *dev)
     int ret;
 
     for (i = 0; i < dev->nbufs; ++i) {
-        memset(&dev->mem[i].buf, 0, sizeof(dev->mem[i].buf));
-
         dev->mem[i].buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
         dev->mem[i].buf.memory = V4L2_MEMORY_MMAP;
         dev->mem[i].buf.index = i;
