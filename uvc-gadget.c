@@ -908,13 +908,7 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
                 vbuf.index, vbuf.bytesused);
             goto requeue_v4l2;
         }
-        size_t raw_min = (size_t)dev->udev->width * dev->udev->height / 8;
-        if (vbuf.bytesused < raw_min) {
-            DEBUG_PRINT_THROTTLED(dqbuf_throttle, 30,
-                "V4L2: Dropping MJPEG frame idx=%d too small (%u bytes)\n",
-                vbuf.index, vbuf.bytesused);
-            goto requeue_v4l2;
-        }
+        /* Accept small MJPEG frames as long as markers are present. */
     }
 
     /* Queue video buffer to UVC domain. */
