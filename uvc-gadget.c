@@ -2594,6 +2594,7 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
      * This honors the host's bandwidth/performance requirements more accurately.
      */
     {
+        /* Clamp the requested interval to the nearest supported value. */
         const unsigned int *best = interval;
         const unsigned int *current = interval;
         unsigned int best_diff = (ctrl->dwFrameInterval > *best) ? 
@@ -2609,6 +2610,8 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
             }
         }
         interval = best;
+        /* Rewrite the incoming control data to the clamped interval so GET_CUR echoes it. */
+        ctrl->dwFrameInterval = *interval;
     }
 
     target->bFormatIndex = iformat;
