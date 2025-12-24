@@ -1678,6 +1678,14 @@ static int uvc_video_qbuf_mmap(struct uvc_device *dev)
 {
     unsigned int i;
     int ret;
+    struct timespec ts;
+    uint64_t base_us = 0;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    base_us = (uint64_t)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000ULL;
+    dev->stream_start_us = base_us;
+    dev->last_timestamp_us = base_us;
+    dev->stream_ts_valid = 1;
 
     for (i = 0; i < dev->nbufs; ++i) {
         dev->mem[i].buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
@@ -1687,6 +1695,20 @@ static int uvc_video_qbuf_mmap(struct uvc_device *dev)
         /* UVC standalone setup. */
         if (dev->run_standalone)
             uvc_video_fill_buffer(dev, &(dev->mem[i].buf));
+
+        /* Stamp deterministic timestamps for initial buffers so DTS never repeats. */
+        {
+            uint64_t seq = dev->qbuf_count;
+            uint64_t interval = dev->frame_interval_us;
+            uint64_t ts_us = base_us + seq * (interval ? interval : 1);
+            dev->last_timestamp_us = ts_us;
+
+            dev->mem[i].buf.timestamp.tv_sec = ts_us / 1000000ULL;
+            dev->mem[i].buf.timestamp.tv_usec = ts_us % 1000000ULL;
+            dev->mem[i].buf.sequence = seq;
+            dev->mem[i].buf.flags |= V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+            dev->mem[i].buf.field = V4L2_FIELD_NONE;
+        }
 
         DEBUG_PRINT("UVC(MMAP): Initial QBUF idx=%d length=%u active_size=%zu\n",
                    dev->mem[i].buf.index, dev->mem[i].buf.length, uvc_active_frame_size(dev));
