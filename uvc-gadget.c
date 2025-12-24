@@ -864,8 +864,9 @@ static int v4l2_process_data(struct v4l2_device *dev)
 
     ret = ioctl(dev->v4l2_fd, VIDIOC_DQBUF, &vbuf);
     if (ret < 0) {
-        DEBUG_PRINT("V4L2: VIDIOC_DQBUF failed: %s (%d), dqbuf_count=%llu\n", 
-                   strerror(errno), errno, dev->dqbuf_count);
+        DEBUG_PRINT_THROTTLED(dqbuf_throttle, 100,
+            "V4L2: VIDIOC_DQBUF failed: %s (%d), dqbuf_count=%llu\n",
+            strerror(errno), errno, dev->dqbuf_count);
         return ret;
     }
 
@@ -912,6 +913,9 @@ tee_write_frame(dev, frame_ptr, vbuf.bytesused);
             return ret;
         }
         dev->udev->dqbuf_count++;
+        DEBUG_PRINT_THROTTLED(qbuf_throttle, 30,
+            "UVC: Host returned buffer idx=%d bytesused=%u (dq=%llu/q=%llu)\n",
+            uvc_dq.index, uvc_dq.bytesused, dev->udev->dqbuf_count, dev->udev->qbuf_count);
 
         ubuf = uvc_dq;
         ubuf.memory = V4L2_MEMORY_MMAP;
