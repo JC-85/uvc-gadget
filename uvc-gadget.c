@@ -88,7 +88,7 @@ static int quiet_mode = 0;
 
 struct uvc_device;
 
-static size_t uvc_default_frame_size(unsigned int width, unsigned int height);
+static size_t uvc_default_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height);
 static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height);
 static size_t uvc_active_frame_size(const struct uvc_device *dev);
 
@@ -318,14 +318,23 @@ static unsigned int uvc_max_payload(const struct uvc_device *dev)
     return max_payload;
 }
 
-static size_t uvc_default_frame_size(unsigned int width, unsigned int height)
+static size_t uvc_default_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height)
 {
-    return (size_t)width * height;
+    /* Use realistic worst-case bytes-per-pixel to size buffers. */
+    switch (dev->fcc) {
+    case V4L2_PIX_FMT_YUYV:
+        return (size_t)width * height * 2;
+    case V4L2_PIX_FMT_MJPEG:
+        /* MJPEG worst-case can approach raw size; 2x is a conservative ceiling. */
+        return (size_t)width * height * 2;
+    default:
+        return (size_t)width * height;
+    }
 }
 
 static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned int width, unsigned int height)
 {
-    size_t fallback = uvc_default_frame_size(width, height);
+    size_t fallback = uvc_default_frame_size(dev, width, height);
     size_t negotiated = dev->imgsize ? dev->imgsize : fallback;
     DEBUG_PRINT("UVC: Negotiated frame size: %zu bytes (default footprint: %zu bytes)\n", negotiated, fallback);
     /* Never allow the negotiated size to be smaller than the raw frame footprint. */
@@ -1849,15 +1858,6 @@ static int uvc_handle_streamon_event(struct uvc_device *dev)
         ret = v4l2_reqbufs(dev->vdev, dev->vdev->nbufs);
         if (ret < 0)
             goto err;
-
-        /* Match UVC buffer sizing to the V4L2 capture buffers exactly. */
-        if (dev->vdev->io == IO_METHOD_MMAP && dev->vdev->mem && dev->vdev->nbufs > 0) {
-            frame_size = dev->vdev->mem[0].length;
-        } else if (vfmt.fmt.pix.sizeimage) {
-            frame_size = vfmt.fmt.pix.sizeimage;
-        }
-
-        dev->imgsize = frame_size;
 
         ret = v4l2_qbuf(dev->vdev);
         if (ret < 0)
