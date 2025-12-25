@@ -49,7 +49,7 @@ fi
 
 if [ "$USE_SAMPLE_SOURCE" -eq 1 ]; then
     echo "Using dummy pattern source (no V4L2, YUYV fill)"
-    sudo ./uvc-gadget -f0 -s1 -r0 -d
+    sudo ./uvc-gadget -f0 -s1 -r0 -d -u /dev/video1
 else
     # Set some camera control options.
     /usr/bin/v4l2-ctl -c auto_exposure=0
