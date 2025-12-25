@@ -30,8 +30,10 @@ echo "UVC" > "$CONFIGFS_ROOT/configs/c.1/strings/0x409/configuration"
 mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0"
 mkdir -p "$CONFIGFS_ROOT/functions/acm.usb0"
 mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h"
-[ ! -e "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" ] && \
-    ln -s "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h" "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h"
+if [ -e "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" ]; then
+    rm -f "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h"
+fi
+ln -s "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h" "$CONFIGFS_ROOT/functions/uvc.usb0/control/class/fs/h" 2>/dev/null || true
 
 # For 720p:
 FRAME_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p"
@@ -89,12 +91,18 @@ STREAMING_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming"
 mkdir -p "$STREAMING_DIR/header/h"
 mkdir -p "$STREAMING_DIR/class/fs"
 mkdir -p "$STREAMING_DIR/class/hs"
-[ ! -e "$STREAMING_DIR/header/h/m" ] && \
-    ln -s "../../mjpeg/m" "$STREAMING_DIR/header/h/m"
-[ ! -e "$STREAMING_DIR/class/fs/h" ] && \
-    ln -s "../../header/h" "$STREAMING_DIR/class/fs/h"
-[ ! -e "$STREAMING_DIR/class/hs/h" ] && \
-    ln -s "../../header/h" "$STREAMING_DIR/class/hs/h"
+if [ -e "$STREAMING_DIR/header/h/m" ]; then
+    rm -f "$STREAMING_DIR/header/h/m"
+fi
+ln -s "../../mjpeg/m" "$STREAMING_DIR/header/h/m" 2>/dev/null || true
+if [ -e "$STREAMING_DIR/class/fs/h" ]; then
+    rm -f "$STREAMING_DIR/class/fs/h"
+fi
+ln -s "../../header/h" "$STREAMING_DIR/class/fs/h" 2>/dev/null || true
+if [ -e "$STREAMING_DIR/class/hs/h" ]; then
+    rm -f "$STREAMING_DIR/class/hs/h"
+fi
+ln -s "../../header/h" "$STREAMING_DIR/class/hs/h" 2>/dev/null || true
 
 # Link functions to config
 [ ! -e "$CONFIGFS_ROOT/configs/c.1/uvc.usb0" ] && \
