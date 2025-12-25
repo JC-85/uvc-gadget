@@ -37,10 +37,11 @@ mkdir -p "$CONFIGFS_ROOT/functions/uvc.usb0/control/header/h"
 FRAME_DIR="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p"
 mkdir -p "$FRAME_DIR"
 
-# Frame intervals in 100ns units: 333333 = 30fps, 666666 = 15fps
+# Frame intervals in 100ns units.
 # Keep only the supported rates we expose in the gadget.
-FRAME_INTERVALS="333333
-666666"
+# We advertise a single rate (15fps) to match what the userspace app
+# negotiates and avoid hosts falling back to very low fps (e.g. 2fps).
+FRAME_INTERVALS="666666"
 echo "$FRAME_INTERVALS" > "$FRAME_DIR/dwFrameInterval"
 echo "1280" > "$FRAME_DIR/wWidth"
 echo "720" > "$FRAME_DIR/wHeight"
@@ -58,7 +59,7 @@ if [ "$ACTUAL_INTERVALS" != "$FRAME_INTERVALS" ]; then
     echo "$ACTUAL_INTERVALS"
     exit 1
 fi
-echo "✓ 720p frame intervals verified: 30fps, 15fps"
+echo "✓ 720p frame intervals verified: 15fps"
 
 # For 1080p:
 # mkdir -p /sys/kernel/config/usb_gadget/pi4/functions/uvc.usb0/streaming/mjpeg/m/1080p

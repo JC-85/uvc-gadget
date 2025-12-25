@@ -2586,10 +2586,12 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
     if (!quiet_mode) {
         const char *phase = (dev->control == UVC_VS_PROBE_CONTROL) ? "PROBE" : 
                            (dev->control == UVC_VS_COMMIT_CONTROL) ? "COMMIT" : "UNKNOWN";
-        printf("%s: Host requested %ux%u interval=%u (%.2f fps)\n",
+        printf("%s: Host requested %ux%u interval=%u (%.2f fps) maxFrame=%u payload=%u\n",
                phase, frame->width, frame->height,
                ctrl->dwFrameInterval,
-               ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0);
+               ctrl->dwFrameInterval ? 1e7 / ctrl->dwFrameInterval : 0.0,
+               ctrl->dwMaxVideoFrameSize,
+               ctrl->dwMaxPayloadTransferSize);
     }
 
     /* Find the closest matching interval to what the host requested.
