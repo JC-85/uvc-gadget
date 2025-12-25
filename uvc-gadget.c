@@ -2954,6 +2954,7 @@ int main(int argc, char *argv[])
 
         case 'd':
             dummy_data_gen_mode = 1;
+            printf("UVC: Dummy/source file mode enabled (-d)\n");
             break;
 
         case 'f':
@@ -3148,9 +3149,11 @@ int main(int argc, char *argv[])
         uvc_formats_count = 1;
     }
 
-    if (dummy_data_gen_mode || mjpeg_image)
+    if (dummy_data_gen_mode || mjpeg_image) {
         /* UVC standalone setup. */
         udev->run_standalone = 1;
+        dummy_data_gen_mode = 1; /* force standalone path when an image is provided */
+    }
 
     if (!dummy_data_gen_mode && !mjpeg_image) {
         /* UVC - V4L2 integrated path */
