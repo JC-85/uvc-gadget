@@ -116,8 +116,21 @@ udevadm settle -t 5 || :
 udc_current=$(cat "$CONFIGFS_ROOT/UDC" 2>/dev/null || true)
 if [ -z "$udc_current" ]; then
     udc_target=$(ls /sys/class/udc | head -n1)
-    echo "$udc_target" > "$CONFIGFS_ROOT/UDC"
-    echo "✓ USB gadget enabled: $udc_target"
+    if [ -z "$udc_target" ]; then
+        echo "ERROR: No UDC available to bind"
+        exit 1
+    fi
+    for attempt in $(seq 1 10); do
+        if echo "$udc_target" > "$CONFIGFS_ROOT/UDC" 2>/dev/null; then
+            echo "✓ USB gadget enabled: $udc_target"
+            break
+        fi
+        sleep 1
+    done
+    if [ ! -s "$CONFIGFS_ROOT/UDC" ]; then
+        echo "ERROR: Failed to bind UDC $udc_target"
+        exit 1
+    fi
 else
     echo "✓ USB gadget already enabled: $udc_current"
 fi
