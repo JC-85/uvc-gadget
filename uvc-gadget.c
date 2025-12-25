@@ -1641,6 +1641,47 @@ static int uvc_video_process(struct uvc_device *dev)
 #endif
         uvc_video_fill_buffer(dev, &ubuf);
 
+        /* Pace standalone streaming to the negotiated frame interval and stamp monotonic metadata. */
+        {
+            struct timespec ts;
+            uint64_t now_us;
+            uint64_t interval = dev->frame_interval_us ? dev->frame_interval_us : 0;
+            uint64_t seq = dev->qbuf_count;
+            uint64_t target_ts = dev->last_timestamp_us;
+
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            now_us = (uint64_t)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000ULL;
+
+            /* Base stream start if this is the very first frame. */
+            if (!dev->stream_ts_valid) {
+                dev->stream_start_us = now_us;
+                dev->last_timestamp_us = now_us;
+                dev->stream_ts_valid = 1;
+                target_ts = now_us;
+            }
+
+            if (interval) {
+                target_ts = dev->last_timestamp_us + interval;
+                if (now_us < target_ts) {
+                    struct timespec sleep_ts = {
+                        .tv_sec = (time_t)((target_ts - now_us) / 1000000ULL),
+                        .tv_nsec = (long)(((target_ts - now_us) % 1000000ULL) * 1000ULL)
+                    };
+                    nanosleep(&sleep_ts, NULL);
+                    now_us = target_ts;
+                } else {
+                    now_us = now_us > dev->last_timestamp_us ? now_us : dev->last_timestamp_us + 1;
+                }
+            }
+
+            dev->last_timestamp_us = now_us;
+            ubuf.timestamp.tv_sec = now_us / 1000000ULL;
+            ubuf.timestamp.tv_usec = now_us % 1000000ULL;
+            ubuf.sequence = seq;
+            ubuf.flags |= V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+            ubuf.field = V4L2_FIELD_NONE;
+        }
+
         ret = ioctl(dev->uvc_fd, VIDIOC_QBUF, &ubuf);
         if (ret < 0)
             return ret;
