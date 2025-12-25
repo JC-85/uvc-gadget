@@ -5,6 +5,10 @@ CONFIGFS_ROOT="/sys/kernel/config/usb_gadget/pi4"
 CFG_INTERVAL_PATH="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p/dwFrameInterval"
 DESIRED_INTERVALS="666666"
 
+# Ensure gadget drivers are loaded.
+sudo modprobe dwc2 || true
+sudo modprobe libcomposite || true
+
 # Fully teardown any existing gadget, then recreate.
 sudo ./teardown-gadget.sh "$CONFIGFS_ROOT"
 sudo ./multi-gadget.sh
