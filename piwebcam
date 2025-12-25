@@ -48,13 +48,8 @@ else
 fi
 
 if [ "$USE_SAMPLE_SOURCE" -eq 1 ]; then
-    if [ ! -s "$SAMPLE_FILE" ]; then
-        echo "Downloading sample MJPEG video to $SAMPLE_FILE"
-        mkdir -p "$(dirname "$SAMPLE_FILE")"
-        curl -L -o "$SAMPLE_FILE" "https://filesamples.com/samples/video/mjpeg/sample_640x360.mjpeg"
-    fi
-    echo "Using sample MJPEG video source: $SAMPLE_FILE"
-    sudo ./uvc-gadget -f1 -s1 -r0 -d -i "$SAMPLE_FILE"
+    echo "Using dummy pattern source (no V4L2, YUYV fill)"
+    sudo ./uvc-gadget -f0 -s1 -r0 -d
 else
     # Set some camera control options.
     /usr/bin/v4l2-ctl -c auto_exposure=0

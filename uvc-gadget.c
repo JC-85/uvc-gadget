@@ -2809,6 +2809,7 @@ static void image_load(struct uvc_device *dev, const char *img)
     if (img == NULL)
         return;
 
+    printf("UVC: loading MJPEG file %s\n", img);
     fd = open(img, O_RDONLY);
     if (fd == -1) {
         printf("Unable to open MJPEG image '%s'\n", img);
@@ -2825,7 +2826,8 @@ static void image_load(struct uvc_device *dev, const char *img)
         return;
     }
 
-    if (read(fd, dev->mjpeg_video, dev->mjpeg_video_size) != (ssize_t)dev->mjpeg_video_size) {
+    ssize_t rd = read(fd, dev->mjpeg_video, dev->mjpeg_video_size);
+    if (rd != (ssize_t)dev->mjpeg_video_size) {
         printf("Unable to read MJPEG video '%s'\n", img);
         free(dev->mjpeg_video);
         dev->mjpeg_video = NULL;
@@ -2835,54 +2837,50 @@ static void image_load(struct uvc_device *dev, const char *img)
     }
     close(fd);
 
-    /* Parse SOI/EOI pairs to build frame table. */
-    {
+    /* Parse first SOI/EOI pair to build a single-frame table. */
+    if (dev->mjpeg_video && dev->mjpeg_video_size > 4) {
         const uint8_t *data = (const uint8_t *)dev->mjpeg_video;
         size_t size = dev->mjpeg_video_size;
+        size_t soi = 0, eoi = 0;
         size_t idx = 0;
-        while (idx + 3 < size) {
+        while (idx + 1 < size) {
             if (data[idx] == 0xff && data[idx + 1] == 0xd8) {
-                size_t soi = idx;
-                size_t eoi = soi + 2;
-                while (eoi + 1 < size) {
-                    if (data[eoi] == 0xff && data[eoi + 1] == 0xd9) {
-                        eoi += 2;
-                        break;
-                    }
-                    eoi++;
-                }
-                if (eoi <= size && eoi > soi + 2) {
-                    frames = realloc(frames, (parsed_frames + 1) * sizeof(*frames));
-                    if (!frames) {
-                        printf("Unable to allocate frame table\n");
-                        break;
-                    }
-                    frames[parsed_frames].offset = soi;
-                    frames[parsed_frames].size = eoi - soi;
-                    parsed_frames++;
-                    idx = eoi;
-                    continue;
-                } else {
-                    break;
-                }
+                soi = idx;
+                break;
             }
             idx++;
         }
-    }
-
-    if (parsed_frames == 0 && dev->mjpeg_video && dev->mjpeg_video_size > 0) {
-        frames = calloc(1, sizeof(*frames));
-        if (frames) {
-            frames[0].offset = 0;
-            frames[0].size = dev->mjpeg_video_size;
-            parsed_frames = 1;
+        idx = soi + 2;
+        while (idx + 1 < size) {
+            if (data[idx] == 0xff && data[idx + 1] == 0xd9) {
+                eoi = idx + 2;
+                break;
+            }
+            idx++;
+        }
+        if (soi < eoi && eoi <= size) {
+            frames = calloc(1, sizeof(*frames));
+            if (frames) {
+                frames[0].offset = soi;
+                frames[0].size = eoi - soi;
+                parsed_frames = 1;
+                printf("UVC: parsed MJPEG frame offset=%zu size=%zu (file=%s)\n",
+                       soi, frames[0].size, img);
+            }
         }
     }
 
     dev->mjpeg_frames = frames;
     dev->mjpeg_frame_count = parsed_frames;
-    dev->imgdata = dev->mjpeg_video;
-    dev->imgsize = dev->mjpeg_video_size;
+    if (parsed_frames > 0) {
+        dev->imgdata = (uint8_t *)dev->mjpeg_video + dev->mjpeg_frames[0].offset;
+        dev->imgsize = dev->mjpeg_frames[0].size;
+        printf("UVC: using MJPEG frame size=%u bytes\n", dev->imgsize);
+    } else {
+        dev->imgdata = dev->mjpeg_video;
+        dev->imgsize = dev->mjpeg_video_size;
+        printf("UVC: using raw MJPEG blob size=%u bytes\n", dev->imgsize);
+    }
 }
 
 static void usage(const char *argv0)
@@ -2921,8 +2919,8 @@ static void usage(const char *argv0)
 
 int main(int argc, char *argv[])
 {
-    struct uvc_device *udev;
-    struct v4l2_device *vdev;
+    struct uvc_device *udev = NULL;
+    struct v4l2_device *vdev = NULL;
     struct timeval tv;
     struct v4l2_format fmt;
     char *uvc_devname = "/dev/video0";
@@ -3062,6 +3060,11 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+
+    printf("UVC: startup mode dummy=%d image=%s standalone=%d\n",
+           dummy_data_gen_mode,
+           mjpeg_image ? "yes" : "no",
+           dummy_data_gen_mode || mjpeg_image);
 
     if (!dummy_data_gen_mode && !mjpeg_image) {
         /*
@@ -3293,12 +3296,13 @@ int main(int argc, char *argv[])
         udev->is_streaming = 0;
     }
 
-    if (vdev->tee_fd >= 0) 
+    if (vdev && vdev->tee_fd >= 0) 
         close(vdev->tee_fd);
 
-    if (!dummy_data_gen_mode && !mjpeg_image)
+    if (!dummy_data_gen_mode && !mjpeg_image && vdev)
         v4l2_close(vdev);
 
-    uvc_close(udev);
+    if (udev)
+        uvc_close(udev);
     return 0;
 }
