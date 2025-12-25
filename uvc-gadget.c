@@ -1513,8 +1513,17 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
 {
     unsigned int bpl;
     unsigned int i;
-    size_t buffer_capacity = dev->mem ? dev->mem[buf->index].length : 0;
+    void *dst = NULL;
+    size_t buffer_capacity = 0;
     const int have_video = dev->mjpeg_frame_count > 0 && dev->mjpeg_frames && dev->mjpeg_video;
+
+    if (dev->io == IO_METHOD_USERPTR && dev->dummy_buf) {
+        dst = dev->dummy_buf[buf->index].start;
+        buffer_capacity = dev->dummy_buf[buf->index].length;
+    } else if (dev->mem) {
+        dst = dev->mem[buf->index].start;
+        buffer_capacity = dev->mem[buf->index].length;
+    }
 
     switch (dev->fcc) {
     case V4L2_PIX_FMT_YUYV:
@@ -1532,7 +1541,7 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
             }
 
             for (i = 0; i < bytes_to_write / bpl; ++i)
-                memset(dev->mem[buf->index].start + i * bpl, dev->color++, bpl);
+                memset((uint8_t *)dst + i * bpl, dev->color++, bpl);
 
             buf->bytesused = bytes_to_write;
         }
@@ -1548,7 +1557,7 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
                 copy_size = frame->size;
                 if (copy_size > buffer_capacity && buffer_capacity > 0)
                     copy_size = buffer_capacity;
-                memcpy(dev->mem[buf->index].start,
+                memcpy(dst,
                        (uint8_t *)dev->mjpeg_video + frame->offset,
                        copy_size);
                 dev->mjpeg_frame_index++;
@@ -1563,8 +1572,10 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
                 copy_size = buffer_capacity;
             }
 
-            if (dev->imgdata && copy_size) {
-                memcpy(dev->mem[buf->index].start, dev->imgdata, copy_size);
+            if (dev->imgdata && copy_size && dst) {
+                memcpy(dst, dev->imgdata, copy_size);
+            } else if (dst && copy_size > buffer_capacity) {
+                copy_size = buffer_capacity;
             }
 
             buf->bytesused = copy_size;
