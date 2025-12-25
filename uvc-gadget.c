@@ -366,6 +366,10 @@ static size_t uvc_negotiated_frame_size(const struct uvc_device *dev, unsigned i
     size_t fallback = uvc_default_frame_size(dev, width, height);
     size_t negotiated = 0;
 
+    /* In standalone MJPEG playback, trust the source frame size to avoid over-advertising. */
+    if (dev->run_standalone && dev->fcc == V4L2_PIX_FMT_MJPEG && dev->imgsize)
+        fallback = dev->imgsize;
+
     if (requested) {
         negotiated = requested;
     } else if (dev->imgsize) {
