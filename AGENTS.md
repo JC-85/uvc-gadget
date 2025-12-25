@@ -24,6 +24,7 @@
 - 2025-12-25: Clamped PROBE/COMMIT dwFrameInterval to the nearest supported interval and rewrite SET_CUR data so GET_CUR echoes the clamped value; intervals remain sorted fastest-to-slowest. Deployed; host still advertising 2 fps in latest runs and ffmpeg reports DTS/decode errors. Next: verify clamp takes effect on host (GET_CUR/host view), capture host PTS, and compare MJPEG payloads.
 - 2025-12-25: Tightened descriptor intervals to 15/30 fps only (removed 1 fps option) to discourage low-fps negotiation. Deployed and retested; host still shows 2 fps and ffmpeg errors persist.
 - 2025-12-25: Limited config script to 15 fps only and added PROBE logging of max frame/payload. Attempted to overwrite configfs intervals via run.sh, but dwFrameInterval remains 5000000 (EBUSY) and UDC ended up unbound; need on-device rebind/teardown to apply new intervals.
+- 2025-12-25: Added teardown-gadget.sh and wired piwebcam/run.sh to teardown-then-setup and assert multi-gadget intervals match 666666 before streaming. Device-side configfs still stuck at 5000000 until teardown is executed on-device.
 
 ## Recent commits
 - `2782f92` Drop undersized MJPEG frames to avoid decode errors.

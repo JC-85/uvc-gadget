@@ -1,7 +1,25 @@
 #!/bin/bash
+set -euo pipefail
 
-# Run multi-gadget setup script.
+CONFIGFS_ROOT="/sys/kernel/config/usb_gadget/pi4"
+CFG_INTERVAL_PATH="$CONFIGFS_ROOT/functions/uvc.usb0/streaming/mjpeg/m/720p/dwFrameInterval"
+DESIRED_INTERVALS="666666"
+
+# Fully teardown any existing gadget, then recreate.
+sudo ./teardown-gadget.sh "$CONFIGFS_ROOT"
 sudo ./multi-gadget.sh
+
+# Verify multi-gadget applied the desired intervals.
+if [ ! -e "$CFG_INTERVAL_PATH" ]; then
+    echo "ERROR: Interval path missing: $CFG_INTERVAL_PATH"
+    exit 2
+fi
+actual_intervals=$(cat "$CFG_INTERVAL_PATH")
+if [ "$actual_intervals" != "$DESIRED_INTERVALS" ]; then
+    echo "ERROR: Interval mismatch. Expected '$DESIRED_INTERVALS' got '$actual_intervals'"
+    exit 3
+fi
+echo "✓ Verified intervals: $actual_intervals"
 
 # Set some camera control options.
 /usr/bin/v4l2-ctl -c auto_exposure=0
