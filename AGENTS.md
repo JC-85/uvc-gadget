@@ -2,7 +2,7 @@
 
 ## Current status
 - Branch: `fix-stream-buffer` (pushed).
-- Standalone dummy mode forces MMAP IO, uses a tracked 1280x720 MJPEG sample (`test-logs/sample_720p.mjpeg`), paces timestamps, advertises the actual 5.6 KB frame size, and queues 8 buffers; first payload dumped to `/tmp/uvc_dump.jpeg` is valid.
+- Standalone dummy mode forces MMAP IO, uses a tracked 1280x720 MJPEG sample (`test-logs/sample_720p.mjpeg`), paces timestamps, advertises the sample size, and queues 8 buffers; first payload dumped to `/tmp/uvc_dump.jpeg` is valid. Sample updated to a realistic ~46 KB frame.
 - Latest runs still show every UVC buffer returned with `V4L2_BUF_FLAG_ERROR`; kernel logs spam “VS request completed with status -61 (ECONNRESET)” and host ffmpeg fails to decode (I/O error, “No JPEG data found”).
 
 ## Open issues
