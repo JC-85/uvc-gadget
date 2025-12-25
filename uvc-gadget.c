@@ -1636,6 +1636,14 @@ static int uvc_video_process(struct uvc_device *dev)
             return ret;
 
         dev->dqbuf_count++;
+
+        if (ubuf.flags & V4L2_BUF_FLAG_ERROR) {
+            if (!quiet_mode) {
+                printf("UVC: Buffer returned with ERROR in standalone - skipping (idx=%d bytes=%u q=%llu dq=%llu)\n",
+                       ubuf.index, ubuf.bytesused, dev->qbuf_count, dev->dqbuf_count);
+            }
+            return 0;
+        }
 #ifdef ENABLE_BUFFER_DEBUG
         printf("DeQueued buffer at UVC side = %d\n", ubuf.index);
 #endif
