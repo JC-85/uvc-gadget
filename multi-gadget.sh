@@ -120,7 +120,7 @@ if [ -z "$udc_current" ]; then
         echo "ERROR: No UDC available to bind"
         exit 1
     fi
-    for attempt in $(seq 1 10); do
+    for attempt in $(seq 1 30); do
         if echo "$udc_target" > "$CONFIGFS_ROOT/UDC" 2>/dev/null; then
             echo "✓ USB gadget enabled: $udc_target"
             break
