@@ -54,7 +54,7 @@ if [ "$USE_SAMPLE_SOURCE" -eq 1 ]; then
         exit 5
     fi
     echo "✓ Using sample MJPEG file: $SAMPLE_FILE"
-    sudo ./uvc-gadget -f1 -s1 -r0 -d -i "$SAMPLE_FILE" -u /dev/video1
+    sudo ./uvc-gadget -f1 -s1 -r0 -n8 -d -i "$SAMPLE_FILE" -u /dev/video1
 else
     # Set some camera control options.
     /usr/bin/v4l2-ctl -c auto_exposure=0
