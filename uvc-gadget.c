@@ -1550,6 +1550,7 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
     case V4L2_PIX_FMT_MJPEG:
         {
             size_t copy_size = dev->imgsize ? dev->imgsize : buffer_capacity;
+            static int dumped_sample_frame = 0;
 
             if (have_video) {
                 const struct mjpeg_frame_desc *frame =
@@ -1562,6 +1563,17 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
                        copy_size);
                 dev->mjpeg_frame_index++;
                 buf->bytesused = copy_size;
+                if (dev->run_standalone && !dumped_sample_frame && dst && copy_size > 0) {
+                    FILE *f = fopen("/tmp/uvc_dump.jpeg", "wb");
+                    if (f) {
+                        fwrite(dst, 1, copy_size, f);
+                        fclose(f);
+                        printf("UVC: dumped MJPEG frame to /tmp/uvc_dump.jpeg (%zu bytes)\n", copy_size);
+                    } else if (!quiet_mode) {
+                        printf("UVC: failed to dump MJPEG frame: %s (%d)\n", strerror(errno), errno);
+                    }
+                    dumped_sample_frame = 1;
+                }
                 break;
             }
 

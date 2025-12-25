@@ -3,4 +3,5 @@ uvc-gadget
 .vscode
 run.sh
 deploy.sh
-test-logs
+test-logs/*
+!test-logs/sample_720p.mjpeg
