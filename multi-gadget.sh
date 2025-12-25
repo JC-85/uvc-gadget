@@ -128,7 +128,8 @@ if [ -z "$udc_current" ]; then
         fi
         sleep 1
     done
-    if [ ! -s "$CONFIGFS_ROOT/UDC" ]; then
+    udc_bound=$(cat "$CONFIGFS_ROOT/UDC" 2>/dev/null || true)
+    if [ -z "$udc_bound" ]; then
         echo "ERROR: Failed to bind UDC $udc_target"
         exit 1
     fi
