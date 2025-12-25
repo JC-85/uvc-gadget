@@ -295,6 +295,16 @@ struct uvc_device {
     unsigned int imgsize;
     void *imgdata;
 
+    /* MJPEG video playback (standalone) */
+    void *mjpeg_video;
+    size_t mjpeg_video_size;
+    struct mjpeg_frame_desc {
+        size_t offset;
+        size_t size;
+    } *mjpeg_frames;
+    unsigned int mjpeg_frame_count;
+    unsigned int mjpeg_frame_index;
+
     /* USB speed specific */
     int mult;
     int burst;
@@ -1479,7 +1489,8 @@ err:
 static void uvc_close(struct uvc_device *dev)
 {
     close(dev->uvc_fd);
-    free(dev->imgdata);
+    free(dev->mjpeg_video);
+    free(dev->mjpeg_frames);
     free(dev);
 }
 
@@ -1492,6 +1503,7 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
     unsigned int bpl;
     unsigned int i;
     size_t buffer_capacity = dev->mem ? dev->mem[buf->index].length : 0;
+    const int have_video = dev->mjpeg_frame_count > 0 && dev->mjpeg_frames && dev->mjpeg_video;
 
     switch (dev->fcc) {
     case V4L2_PIX_FMT_YUYV:
@@ -1518,6 +1530,20 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
     case V4L2_PIX_FMT_MJPEG:
         {
             size_t copy_size = dev->imgsize ? dev->imgsize : buffer_capacity;
+
+            if (have_video) {
+                const struct mjpeg_frame_desc *frame =
+                    &dev->mjpeg_frames[dev->mjpeg_frame_index % dev->mjpeg_frame_count];
+                copy_size = frame->size;
+                if (copy_size > buffer_capacity && buffer_capacity > 0)
+                    copy_size = buffer_capacity;
+                memcpy(dev->mem[buf->index].start,
+                       (uint8_t *)dev->mjpeg_video + frame->offset,
+                       copy_size);
+                dev->mjpeg_frame_index++;
+                buf->bytesused = copy_size;
+                break;
+            }
 
             if (copy_size > buffer_capacity && buffer_capacity > 0) {
                 if (!quiet_mode)
@@ -2769,6 +2795,16 @@ static void uvc_events_init(struct uvc_device *dev)
 static void image_load(struct uvc_device *dev, const char *img)
 {
     int fd = -1;
+    size_t parsed_frames = 0;
+    struct mjpeg_frame_desc *frames = NULL;
+
+    free(dev->mjpeg_video);
+    free(dev->mjpeg_frames);
+    dev->mjpeg_video = NULL;
+    dev->mjpeg_frames = NULL;
+    dev->mjpeg_video_size = 0;
+    dev->mjpeg_frame_count = 0;
+    dev->mjpeg_frame_index = 0;
 
     if (img == NULL)
         return;
@@ -2779,17 +2815,74 @@ static void image_load(struct uvc_device *dev, const char *img)
         return;
     }
 
-    dev->imgsize = lseek(fd, 0, SEEK_END);
+    dev->mjpeg_video_size = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
-    dev->imgdata = malloc(dev->imgsize);
-    if (dev->imgdata == NULL) {
-        printf("Unable to allocate memory for MJPEG image\n");
-        dev->imgsize = 0;
+    dev->mjpeg_video = malloc(dev->mjpeg_video_size);
+    if (dev->mjpeg_video == NULL) {
+        printf("Unable to allocate memory for MJPEG video\n");
+        dev->mjpeg_video_size = 0;
+        close(fd);
         return;
     }
 
-    read(fd, dev->imgdata, dev->imgsize);
+    if (read(fd, dev->mjpeg_video, dev->mjpeg_video_size) != (ssize_t)dev->mjpeg_video_size) {
+        printf("Unable to read MJPEG video '%s'\n", img);
+        free(dev->mjpeg_video);
+        dev->mjpeg_video = NULL;
+        dev->mjpeg_video_size = 0;
+        close(fd);
+        return;
+    }
     close(fd);
+
+    /* Parse SOI/EOI pairs to build frame table. */
+    {
+        const uint8_t *data = (const uint8_t *)dev->mjpeg_video;
+        size_t size = dev->mjpeg_video_size;
+        size_t idx = 0;
+        while (idx + 3 < size) {
+            if (data[idx] == 0xff && data[idx + 1] == 0xd8) {
+                size_t soi = idx;
+                size_t eoi = soi + 2;
+                while (eoi + 1 < size) {
+                    if (data[eoi] == 0xff && data[eoi + 1] == 0xd9) {
+                        eoi += 2;
+                        break;
+                    }
+                    eoi++;
+                }
+                if (eoi <= size && eoi > soi + 2) {
+                    frames = realloc(frames, (parsed_frames + 1) * sizeof(*frames));
+                    if (!frames) {
+                        printf("Unable to allocate frame table\n");
+                        break;
+                    }
+                    frames[parsed_frames].offset = soi;
+                    frames[parsed_frames].size = eoi - soi;
+                    parsed_frames++;
+                    idx = eoi;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            idx++;
+        }
+    }
+
+    if (parsed_frames == 0 && dev->mjpeg_video && dev->mjpeg_video_size > 0) {
+        frames = calloc(1, sizeof(*frames));
+        if (frames) {
+            frames[0].offset = 0;
+            frames[0].size = dev->mjpeg_video_size;
+            parsed_frames = 1;
+        }
+    }
+
+    dev->mjpeg_frames = frames;
+    dev->mjpeg_frame_count = parsed_frames;
+    dev->imgdata = dev->mjpeg_video;
+    dev->imgsize = dev->mjpeg_video_size;
 }
 
 static void usage(const char *argv0)
