@@ -112,10 +112,12 @@ ln -s "../../header/h" "$STREAMING_DIR/class/hs/h" 2>/dev/null || true
 
 udevadm settle -t 5 || :
 
-# Enable the gadget only if not already enabled
-if [ ! -s "$CONFIGFS_ROOT/UDC" ]; then
-    ls /sys/class/udc > "$CONFIGFS_ROOT/UDC"
-    echo "✓ USB gadget enabled"
+# Enable the gadget (or rebind if the UDC file is empty)
+udc_current=$(cat "$CONFIGFS_ROOT/UDC" 2>/dev/null || true)
+if [ -z "$udc_current" ]; then
+    udc_target=$(ls /sys/class/udc | head -n1)
+    echo "$udc_target" > "$CONFIGFS_ROOT/UDC"
+    echo "✓ USB gadget enabled: $udc_target"
 else
-    echo "✓ USB gadget already enabled: $(cat "$CONFIGFS_ROOT/UDC")"
+    echo "✓ USB gadget already enabled: $udc_current"
 fi
