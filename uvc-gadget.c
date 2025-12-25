@@ -3158,7 +3158,6 @@ int main(int argc, char *argv[])
      * MJPEG compression can vary significantly - detailed/noisy frames need more space. */
     udev->imgsize = udev->width * udev->height * 2;
     udev->fcc = (default_format == 0) ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
-    udev->io = uvc_io_method;
     udev->bulk = bulk_mode;
     udev->nbufs = nbufs;
     udev->mult = mult;
@@ -3196,6 +3195,9 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* After handling standalone overrides, finalize IO choice. */
+    udev->io = uvc_io_method;
+
     if (!dummy_data_gen_mode && !mjpeg_image) {
         /* UVC - V4L2 integrated path */
         vdev->nbufs = nbufs;
@@ -3204,7 +3206,7 @@ int main(int argc, char *argv[])
          * IO methods: favor MMAP on V4L2 when UVC uses MMAP so we can
          * copy into the UVC-owned buffers deterministically.
          */
-        switch (uvc_io_method) {
+        switch (udev->io) {
         case IO_METHOD_MMAP:
             vdev->io = IO_METHOD_MMAP;
             break;
