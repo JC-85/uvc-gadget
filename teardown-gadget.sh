@@ -28,15 +28,22 @@ done
 UVC_FUNC="$CONFIGFS_ROOT/functions/uvc.usb0"
 if [ -d "$UVC_FUNC" ]; then
     find "$UVC_FUNC" -type l -exec rm -f {} + || true
-    # Remove streaming/control subdirs (attributes live inside; removing the dir removes them)
-    find "$UVC_FUNC" -depth -mindepth 1 -type d -exec rmdir {} + 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        find "$UVC_FUNC" -depth -type d -exec rmdir {} + 2>/dev/null || true
+        [ ! -d "$UVC_FUNC" ] && break
+        sleep 0.1
+    done
     rmdir "$UVC_FUNC" 2>/dev/null || true
 fi
 
 ACM_FUNC="$CONFIGFS_ROOT/functions/acm.usb0"
 if [ -d "$ACM_FUNC" ]; then
     find "$ACM_FUNC" -type l -exec rm -f {} + || true
-    find "$ACM_FUNC" -depth -mindepth 1 -type d -exec rmdir {} + 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        find "$ACM_FUNC" -depth -type d -exec rmdir {} + 2>/dev/null || true
+        [ ! -d "$ACM_FUNC" ] && break
+        sleep 0.1
+    done
     rmdir "$ACM_FUNC" 2>/dev/null || true
 fi
 
