@@ -3178,6 +3178,7 @@ int main(int argc, char *argv[])
         /* UVC standalone setup. */
         udev->run_standalone = 1;
         dummy_data_gen_mode = 1; /* force standalone path when an image is provided */
+        uvc_io_method = IO_METHOD_MMAP; /* prefer MMAP for standalone dummy */
 
         /* If MJPEG and no image provided, fall back to tiny_jpeg frame. */
         if (mjpeg_image == NULL && udev->fcc == V4L2_PIX_FMT_MJPEG) {
