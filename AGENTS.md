@@ -2,10 +2,8 @@
 
 ## Current status
 - Branch: `fix-stream-buffer` (pushed).
-- Standalone dummy mode now forces MMAP IO (segfault fixed), uses a tracked sample MJPEG frame (`test-logs/sample_720p.mjpeg`), and paces timestamps to the negotiated interval.
-- Added debug dump of the first MJPEG payload to `/tmp/uvc_dump.jpeg` on the Pi; file is a valid 1280x720 JPEG (verified locally).
-- Runs show every UVC buffer being returned with `V4L2_BUF_FLAG_ERROR`; gadget logs continuous “VS request completed with status -61” and host ffmpeg fails to decode (I/O error, “No JPEG data found”).
-- ffmpeg_output.log is now truncated per test to inspect only the latest run.
+- Standalone dummy mode forces MMAP IO, uses a tracked 1280x720 MJPEG sample (`test-logs/sample_720p.mjpeg`), paces timestamps, advertises the actual 5.6 KB frame size, and queues 8 buffers; first payload dumped to `/tmp/uvc_dump.jpeg` is valid.
+- Latest runs still show every UVC buffer returned with `V4L2_BUF_FLAG_ERROR`; kernel logs spam “VS request completed with status -61 (ECONNRESET)” and host ffmpeg fails to decode (I/O error, “No JPEG data found”).
 
 ## Open issues
 - UVC stream still failing: all dequeued buffers come back with ERROR, kernel logs show VS requests ending with -61 (ECONNRESET), and host ffmpeg can’t decode any frames.
@@ -24,6 +22,7 @@
 - 2025-12-25: Added teardown-gadget.sh and wired piwebcam/run.sh to teardown-then-setup and assert multi-gadget intervals match 666666 before streaming. Device-side configfs still stuck at 5000000 until teardown is executed on-device.
 - 2025-12-25: Fixed config rebuild pipeline: reboot + teardown + multi-gadget now binds UDC, applies 666666 intervals, and uvc-gadget opens successfully (host stream still pending host-side ffmpeg).
 - 2025-12-25: Fixed dummy/MMAP segfault by honoring standalone IO choice; added tracked 1280x720 sample MJPEG, timestamp pacing, and buffer dump. Current blocker: UVC buffers returned with ERROR/-61 and host still can’t decode.
+- 2025-12-25: Advertise actual sample MJPEG size in standalone and bumped dummy buffers to 8; kernel still reports VS -61 and host decoding fails.
 
 ## Recent commits
 - `2782f92` Drop undersized MJPEG frames to avoid decode errors.
