@@ -2,22 +2,19 @@
 
 ## Current status
 - Branch: `fix-stream-buffer` (pushed).
-- Gadget now copies V4L2 MJPEG into UVC MMAP buffers, stamps monotonic timestamps/sequence based on negotiated interval, and drops MJPEG frames missing markers or under 60 KB.
-- Advertised UVC frame intervals are limited to 15 fps (mjpeg/yuyv arrays + config script) to keep hosts off 2 fps.
-- Current configfs on device is now rebuilt on each run (reboot + teardown + multi-gadget) and verifies `dwFrameInterval=666666` before streaming. UDC bind now succeeds on first attempt after full rebuild.
-- Latest run (`run.sh` → `test-logs/linux-20251225-0010xx.log` / `test-logs/ffmpeg_output.log`):
-  - Gadget side streams stable ~95–100 KB MJPEG buffers with monotonic timestamps.
-  - Windows dshow still reports 2 fps; ffmpeg log shows “non monotonically increasing dts” and MJPEG decode errors (bad VLC/EOI before SOF).
-  - Timeout exit (expected); no gadget-side errors.
+- Standalone dummy mode now forces MMAP IO (segfault fixed), uses a tracked sample MJPEG frame (`test-logs/sample_720p.mjpeg`), and paces timestamps to the negotiated interval.
+- Added debug dump of the first MJPEG payload to `/tmp/uvc_dump.jpeg` on the Pi; file is a valid 1280x720 JPEG (verified locally).
+- Runs show every UVC buffer being returned with `V4L2_BUF_FLAG_ERROR`; gadget logs continuous “VS request completed with status -61” and host ffmpeg fails to decode (I/O error, “No JPEG data found”).
+- ffmpeg_output.log is now truncated per test to inspect only the latest run.
 
 ## Open issues
-- Host appears to ignore negotiated 15 fps and sticks to 2 fps, causing repeated DTS warnings on ffmpeg.
-- Host receives MJPEG packets that ffmpeg flags as corrupt despite marker checks and size floor on gadget side.
+- UVC stream still failing: all dequeued buffers come back with ERROR, kernel logs show VS requests ending with -61 (ECONNRESET), and host ffmpeg can’t decode any frames.
+- Need to determine why the host resets requests: payload layout/headers vs. size negotiation vs. endpoint configuration.
 
 ## Next steps
-1) Validate host timestamps: confirm UVC header PTS/delta via host capture (Wireshark or Windows-side logging) to ensure monotonic timestamps are delivered.
-2) Compare payload integrity: capture sample MJPEG payload from gadget side and host side to see where corruption is introduced; tighten validation if corruption originates before USB.
-3) Re-run end-to-end with host capture (ffmpeg) to confirm 15fps negotiation and payload integrity; ensure Windows command reachable from run.sh.
+1) Capture more detail around the ERROR returns (-61) from g_uvc (usbmon or verbose kernel logging) to understand why the host resets VS requests.
+2) Verify what payload size/headers the gadget is sending (confirm bytesused honored, consider adding optional UVC header construction if needed).
+3) Once ERROR is resolved, re-run ffmpeg and confirm sustained ≥15 fps for 10s with the sample MJPEG source.
 
 ### Milestones
 - 2025-12-25: Added monotonic timestamp stamping (including initial MMAP QBUF), defaulted advertised intervals to 15fps preference, and dropped MJPEG frames under 60 KB. Host still reports 2 fps; ffmpeg DTS warnings persist. Continued work needed on enforcing interval and validating host-side PTS/data.
@@ -26,6 +23,7 @@
 - 2025-12-25: Limited config script to 15 fps only and added PROBE logging of max frame/payload. Attempted to overwrite configfs intervals via run.sh, but dwFrameInterval remains 5000000 (EBUSY) and UDC ended up unbound; need on-device rebind/teardown to apply new intervals.
 - 2025-12-25: Added teardown-gadget.sh and wired piwebcam/run.sh to teardown-then-setup and assert multi-gadget intervals match 666666 before streaming. Device-side configfs still stuck at 5000000 until teardown is executed on-device.
 - 2025-12-25: Fixed config rebuild pipeline: reboot + teardown + multi-gadget now binds UDC, applies 666666 intervals, and uvc-gadget opens successfully (host stream still pending host-side ffmpeg).
+- 2025-12-25: Fixed dummy/MMAP segfault by honoring standalone IO choice; added tracked 1280x720 sample MJPEG, timestamp pacing, and buffer dump. Current blocker: UVC buffers returned with ERROR/-61 and host still can’t decode.
 
 ## Recent commits
 - `2782f92` Drop undersized MJPEG frames to avoid decode errors.
