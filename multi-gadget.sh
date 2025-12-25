@@ -121,6 +121,7 @@ if [ -z "$udc_current" ]; then
         exit 1
     fi
     for attempt in $(seq 1 30); do
+        echo "Binding UDC attempt $attempt: $udc_target"
         if echo "$udc_target" > "$CONFIGFS_ROOT/UDC" 2>/dev/null; then
             echo "✓ USB gadget enabled: $udc_target"
             break
