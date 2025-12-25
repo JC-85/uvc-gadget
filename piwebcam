@@ -9,11 +9,13 @@ DESIRED_INTERVALS="666666"
 sudo modprobe dwc2 || true
 sudo modprobe libcomposite || true
 
-# Fully teardown any existing gadget, then recreate.
-sudo ./teardown-gadget.sh "$CONFIGFS_ROOT"
-sudo ./multi-gadget.sh
+# Ensure gadget exists and has correct intervals. Only rebuild if needed.
+if [ ! -e "$CFG_INTERVAL_PATH" ] || [ "$(cat "$CFG_INTERVAL_PATH" 2>/dev/null || true)" != "$DESIRED_INTERVALS" ]; then
+    echo "Intervals missing/mismatched; running multi-gadget.sh to configure gadget..."
+    sudo ./multi-gadget.sh
+fi
 
-# Verify multi-gadget applied the desired intervals.
+# Verify intervals after setup.
 if [ ! -e "$CFG_INTERVAL_PATH" ]; then
     echo "ERROR: Interval path missing: $CFG_INTERVAL_PATH"
     exit 2
@@ -24,6 +26,24 @@ if [ "$actual_intervals" != "$DESIRED_INTERVALS" ]; then
     exit 3
 fi
 echo "✓ Verified intervals: $actual_intervals"
+
+# Ensure UDC is bound (bind only if empty).
+UDC_PATH="$CONFIGFS_ROOT/UDC"
+udc_current=$(cat "$UDC_PATH" 2>/dev/null || true)
+if [ -z "$udc_current" ]; then
+    udc_target=$(ls /sys/class/udc | head -n1)
+    if [ -z "$udc_target" ]; then
+        echo "ERROR: No UDC available to bind"
+        exit 4
+    fi
+    if ! echo "$udc_target" | sudo tee "$UDC_PATH" >/dev/null; then
+        echo "ERROR: Failed to bind UDC $udc_target"
+        exit 4
+    fi
+    echo "✓ Bound UDC: $udc_target"
+else
+    echo "✓ UDC already bound: $udc_current"
+fi
 
 # Set some camera control options.
 /usr/bin/v4l2-ctl -c auto_exposure=0
